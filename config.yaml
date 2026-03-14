@@ -1,0 +1,84 @@
+project:
+  benchmark: forc4cl
+  run_name: citescibert_forc4cl
+  output_dir: runs/citescibert
+  cache_dir: cache/citescibert
+
+data:
+  documents: data/forc4cl/documents.csv
+  citations: data/forc4cl/citations.csv
+  baselines: data/forc4cl/baselines.csv
+
+  label_column: label
+  source_col: source
+  target_col: target
+  split_strategy: time
+  graph_mode: transductive
+  label_ratio: 0.10
+  test_size: 0.20
+  val_size: 0.10
+
+  max_context_size: 18
+  sampling_strategy: local_relevance
+  connectivity_weight: 0.35
+  temporal_weight: 0.35
+  reciprocity_weight: 0.15
+  overlap_weight: 0.15
+
+  max_seq_length: 512
+  max_authors: null
+  cache_text: true
+  pretokenize_context: true
+
+model:
+  tokenizer_name: allenai/scibert_scivocab_uncased
+  text_dim: 768
+  metadata_dim: 256
+  citation_dim: 256
+  fusion_dim: 512
+  classifier_scale: 10.0
+
+  peft_mode: lora
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.1
+  gradient_checkpointing: true
+  freeze_backbone_until_layer: 6
+
+  citation_heads: 4
+  citation_layers: 2
+  citation_ff_dim: 512
+  selector_hidden_dim: 256
+  selector_top_k: 8
+  citation_dropout: 0.1
+  fusion_modality_dropout: 0.1
+
+train:
+  batch_size: 8
+  num_workers: 2
+  pretrain_epochs: 2
+  finetune_epochs: 3
+  seeds: [42, 1337, 2025]
+  ablations: [full, text_only, text_metadata, text_citation]
+
+trainer:
+  mixed_precision: fp16
+  gradient_accumulation_steps: 2
+  learning_rate: 2.0e-5
+  pretrain_learning_rate: 2.0e-5
+  finetune_learning_rate: 1.0e-5
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  early_stopping_patience: 5
+  ssl_weight: 1.0
+  pseudo_label_beta: 0.90
+  pseudo_label_temperature: 1.0
+  pseudo_label_warmup_epochs: 1
+  pseudo_label_min_per_class: 1
+  pseudo_label_use_ema: true
+  pseudo_label_ema_momentum: 0.90
+  distribution_alignment: true
+  save_artifacts: true
+  log_every_n_steps: 20
+  use_mlflow: true
+  mlflow_experiment: CiteSciBERT
