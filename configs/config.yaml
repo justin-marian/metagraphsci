@@ -12,32 +12,47 @@ data:
   label_column: label
   source_col: source
   target_col: target
+  
+  # Graph Evaluation Constraints
   split_strategy: time
   graph_mode: transductive
   label_ratio: 0.10
   test_size: 0.20
   val_size: 0.10
 
+  # Citation Context Caching
   max_context_size: 18
   sampling_strategy: local_relevance
   connectivity_weight: 0.35
   temporal_weight: 0.35
   reciprocity_weight: 0.15
   overlap_weight: 0.15
+  
+  # Structural Encodings
+  k_hops: 2
+  spectral_dim: 0
+  enable_spectral: false
 
+  # Text Processing
   max_seq_length: 512
   max_authors: null
   cache_text: true
   pretokenize_context: true
 
 model:
-  tokenizer_name: allenai/scibert_scivocab_uncased
+  # Base Dimensions
+  tokenizer_name: allenai/scibert # Must match exactly to pass TextEncoder validation
   text_dim: 768
   metadata_dim: 256
   citation_dim: 256
   fusion_dim: 512
   classifier_scale: 10.0
 
+  # Metadata Deep Cross Network
+  metadata_embedding_dim: 64
+  metadata_cross_layers: 3
+
+  # PEFT / LoRA Backbone Tuning
   peft_mode: lora
   lora_r: 8
   lora_alpha: 16
@@ -45,6 +60,7 @@ model:
   gradient_checkpointing: true
   freeze_backbone_until_layer: 6
 
+  # Graph Transformer & Bottleneck
   citation_heads: 4
   citation_layers: 2
   citation_ff_dim: 512
@@ -52,6 +68,11 @@ model:
   selector_top_k: 8
   citation_dropout: 0.1
   fusion_modality_dropout: 0.1
+  
+  # Latent Graph Discovery
+  use_latent_graph: true
+  latent_graph_top_k: 4
+  hybrid_alpha_init: -2.0 # Starts latent graph contribution low (sigmoid(-2) ~ 0.12)
 
 train:
   batch_size: 8
@@ -62,23 +83,31 @@ train:
   ablations: [full, text_only, text_metadata, text_citation]
 
 trainer:
+  # Hardware & Optimization
   mixed_precision: fp16
   gradient_accumulation_steps: 2
-  learning_rate: 2.0e-5
-  pretrain_learning_rate: 2.0e-5
-  finetune_learning_rate: 1.0e-5
+  pretrain_lr: 2.0e-5
+  finetune_lr: 1.0e-5
   weight_decay: 0.01
   max_grad_norm: 1.0
-  early_stopping_patience: 5
-  ssl_weight: 1.0
-  pseudo_label_beta: 0.90
-  pseudo_label_temperature: 1.0
-  pseudo_label_warmup_epochs: 1
-  pseudo_label_min_per_class: 1
-  pseudo_label_use_ema: true
-  pseudo_label_ema_momentum: 0.90
-  distribution_alignment: true
-  save_artifacts: true
-  log_every_n_steps: 20
+  selection_metric: macro_f1
+  
+  # Self-Supervised Learning (SSL) Constraints
+  lambda_ssl: 1.0
+  contrastive_temperature: 0.07
+  metadata_negative_weight: 0.25
+  ssl_text_dropout: 0.15
+
+  # Semi-Supervised Fine-Tuning
+  pseudo_label:
+    beta: 0.90
+    temperature: 1.0
+    warmup_epochs: 1
+    min_per_class: 1
+    ema_momentum: 0.90
+    distributionalignment: true
+
+  # Experiment Tracking
   use_mlflow: true
   mlflow_experiment: CiteSciBERT
+  use_wandb: false
