@@ -1,4 +1,4 @@
-from typing import Sequence
+from typing import Any, Sequence
 import numpy as np
 import torch
 from torch import Tensor
@@ -6,16 +6,26 @@ from torch import Tensor
 
 class PseudoLabeler:
     """
-    Select pseudo-labels with alignment, sharpening, and adaptive thresholds.
+    Generates pseudo-targets through prior correction, confidence sharpening,
+    and adaptive acceptance criteria.
 
-    This utility processes model predictions on unlabeled data to generate high-quality 
-    pseudo-labels for semi-supervised training. It corrects for class imbalance, 
-    amplifies confidence, and uses dynamic thresholds to accept only robust predictions.
+    Intended for semi-supervised learning, where predictions on unlabeled samples 
+    are filtered before being reused as supervision. Its role is to reduce confirmation bias, 
+    strengthen confident decisions, and apply a dynamic curriculum so that easier categories
+    do not dominate training too early.
+
+    PERSISTENT ADAPTIVE STATE
+    -------------------------
+    Part of the internal adaptive behavior depends on a running estimate that evolves
+    over time. Because this state is not automatically preserved by the main training
+    checkpoint mechanism, it should be saved and restored explicitly when resuming
+    training. Otherwise, the acceptance curriculum restarts from scratch and may
+    behave inconsistently after loading a checkpoint.
     """
 
     def __init__(
-        self, beta: float = 0.95, warmup_epochs: int = 0, min_per_class: int = 0, 
-        temperature: float = 1.0, ema_momentum: float = 0.9, distributionalignment: bool = True, 
+        self, beta: float = 0.95, warmup_epochs: int = 0, min_per_class: int = 0,
+        temperature: float = 1.0, ema_momentum: float = 0.9, distributionalignment: bool = True,
         target_prior: Sequence[float] | None = None) -> None:
         self.beta = float(beta)
         self.warmup_epochs = int(warmup_epochs)
@@ -26,14 +36,35 @@ class PseudoLabeler:
         self.target_prior = None if target_prior is None else torch.tensor(target_prior, dtype=torch.float32)
         self.ema_class_max: Tensor | None = None
 
+    def labeler_state_dict(self) -> dict[str, Any]:
+        """Exports the adaptive state required for consistent checkpoint restoration."""
+        return {
+            "ema_class_max": self.ema_class_max.cpu() if self.ema_class_max is not None else None,
+            "target_prior": self.target_prior.cpu() if self.target_prior is not None else None
+        }
+
+    def load_labeler_state_dict(self, state: dict[str, Any]) -> None:
+        """Restores the adaptive state previously saved during training."""
+        ema = state.get("ema_class_max")
+        if ema is not None and not isinstance(ema, Tensor):
+            self.ema_class_max = ema.clone() if isinstance(ema, Tensor) else None
+        prior = state.get("target_prior")
+        if isinstance(prior, Tensor) and prior is not None:
+            self.target_prior = prior.clone()
+
+    def reset(self) -> None:
+        """Removes accumulated history before beginning a separate run."""
+        self.ema_class_max = None
+
     def align(self, probs: Tensor) -> Tensor:
-        """Adjusts prediction probabilities to match a target class distribution prior."""
-        # Distribution Alignment
-        # In semi-supervised learning, models suffer from severe "confirmation bias", they 
-        # confidently predict majority classes on unlabeled data and ignore minority classes.
-        # By scaling the model's current batch predictions against the known ground-truth 
-        # distribution (target_prior), force the model to generate pseudo-labels that respect
-        # the true dataset imbalance, preventing minority class collapse.
+        """
+        Calibrates predictions so that the resulting category proportions better match
+        an expected target distribution.
+        """
+        # Without correction, pseudo-target generation tends to over-favor dominant
+        # categories and suppress underrepresented ones.
+        # This stage counteracts that tendency by reweighting predictions toward a
+        # desired prior, improving balance throughout semi-supervised training.
         if not self.distributionalignment:
             return probs
 
@@ -47,62 +78,59 @@ class PseudoLabeler:
         return aligned / aligned.sum(dim=1, keepdim=True).clamp_min(1e-9)
 
     def sharpen(self, probs: Tensor) -> Tensor:
-        """Temperature scaling to make the probability distribution peakier."""
-        # Entropy Minimization
-        # Pseudo-labels are used as hard targets (one-hot vectors). If the model's 
-        # probability distribution is "flat" (e.g., [0.4, 0.3, 0.3]), taking the argmax 
-        # is dangerous. Temperature scaling (T < 1.0) artificially pushes the highest 
-        # probability closer to 1.0 and suppresses the others. This acts as an implicit 
-        # entropy minimization regularizer during training.
+        """Reduces uncertainty by making confident outcomes more pronounced."""
+        # Soft or ambiguous predictions are risky when converted into supervision.
+        # This transformation suppresses uncertainty and makes the most likely outcome
+        # more dominant, which improves the reliability of accepted pseudo-targets.
         if np.isclose(self.temperature, 1.0):
             return probs
-            
+
         scaled = probs.pow(1.0 / max(self.temperature, 1e-6))
         return scaled / scaled.sum(dim=1, keepdim=True).clamp_min(1e-9)
 
     def thresholds(self, probs: Tensor) -> Tensor:
-        """Maintains a moving average of maximum confidences to establish dynamic thresholds."""
-        # Dynamic Curriculum (FlexMatch approach)
-        # A static threshold (e.g., 0.95) works poorly because "easy" classes cross 0.95 
-        # in epoch 1, while "hard" classes might never cross it, causing them to receive 
-        # zero pseudo-labels. Track an Exponential Moving Average (EMA) of the model's 
-        # maximum confidence *per class*. This creates a dynamic threshold: hard classes 
-        # are allowed to have lower thresholds initially, dynamically scaling up as the model learns.
+        """Updates confidence requirements dynamically according to the model's evolving behavior."""
+        # Fixed acceptance rules are often too strict for difficult categories and
+        # too lenient for easy ones.
+        # A moving estimate provides a curriculum-like mechanism that adapts over
+        # time, allowing participation to grow naturally as reliability improves.
+        #
+        # Because this behavior depends on accumulated history, that history should
+        # be preserved across save/load boundaries to avoid silently resetting the curriculum.
         batch_max = probs.max(dim=0).values.detach()
-        
+
         if self.ema_class_max is None:
             self.ema_class_max = batch_max
         else:
             self.ema_class_max = self.ema_momentum * self.ema_class_max.to(batch_max.device) + (1.0 - self.ema_momentum) * batch_max
-            
-        return self.beta * (self.ema_class_max if self.ema_class_max is not None else batch_max).to(probs.device)
+
+        return self.beta * self.ema_class_max.to(probs.device)
 
     def select(self, probs: Tensor, epoch: int) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        """Runs the full pseudo-labeling pipeline to determine which predictions to keep."""
+        """
+        Combines calibration, sharpening, adaptive filtering, and safety constraints
+        to decide which pseudo-targets are retained.
+        """
         adjusted = self.sharpen(self.align(probs))
         confidence, pseudo_labels = adjusted.max(dim=1)
         thresholds = self.thresholds(adjusted)
 
         keep = confidence >= thresholds[pseudo_labels]
-        
-        # Warmup Phase
-        # At epoch 0, the model's weights are random (or only pretrained via self-supervision). 
-        # Generating pseudo-labels immediately would permanently encode random garbage 
-        # into the training loop. Strictly reject everything until the warmup phase clears.
+
+        # Early training stages are typically too unstable for reliable self-generated
+        # supervision, so acceptance is delayed until a minimum maturity is reached.
         if epoch <= self.warmup_epochs:
             keep = torch.zeros_like(keep)
 
-        # Anti-Starvation Fallback
-        # Even with distribution alignment, a catastrophic batch might result in 0 accepted 
-        # labels for a specific class. `min_per_class` forces the model to accept the top-K 
-        # most confident predictions for that class, regardless of threshold, ensuring the 
-        # cross-entropy loss always receives gradients for every category.
+        # An additional safeguard prevents difficult categories from disappearing
+        # entirely during training by ensuring they continue to contribute learning
+        # signal even when confidence remains comparatively low.
         if self.min_per_class > 0:
             for cls in range(adjusted.size(1)):
                 candidates = torch.where(pseudo_labels == cls)[0]
                 if len(candidates) == 0 or int(keep[candidates].sum().item()) >= self.min_per_class:
                     continue
-                    
+
                 topk = confidence[candidates].topk(k=min(self.min_per_class, len(candidates))).indices
                 keep[candidates[topk]] = True
 

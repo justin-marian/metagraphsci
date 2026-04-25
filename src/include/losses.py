@@ -25,12 +25,9 @@ class NeighborhoodAwareContrastiveLoss(nn.Module):
 
     def forward(
         self,
-        anchor: Tensor,
-        positive: Tensor,
-        batch_doc_ids: Tensor,
-        batch_neighborhoods: list[set[int]],
-        metadata_affinity: Tensor | None = None,
-        positive_mask: Tensor | None = None,
+        anchor: Tensor, positive: Tensor,
+        batch_doc_ids: Tensor, batch_neighborhoods: list[set[int]],
+        metadata_affinity: Tensor | None = None, positive_mask: Tensor | None = None
     ) -> Tensor:
         """Compute the neighborhood-aware contrastive objective for a mini-batch."""
         # Unit-Sphere Projection
@@ -57,12 +54,21 @@ class NeighborhoodAwareContrastiveLoss(nn.Module):
         negative_mask = torch.ones((batch_size, batch_size), dtype=torch.bool, device=device)
         negative_mask.fill_diagonal_(False)
 
-        doc_ids = batch_doc_ids.detach().cpu().tolist()
+        # Convert neighborhoods into a padded tensor for vectorized comparison
+        max_neighbors = max(len(n) for n in batch_neighborhoods) if batch_neighborhoods else 0
 
-        for row_idx, excluded_ids in enumerate(batch_neighborhoods):
-            for col_idx, doc_id in enumerate(doc_ids):
-                if int(doc_id) in excluded_ids:
-                    negative_mask[row_idx, col_idx] = False
+        if max_neighbors > 0:
+            neighbors_tensor = torch.full((batch_size, max_neighbors), fill_value=-1, dtype=batch_doc_ids.dtype, device=device)
+            for i, neigh in enumerate(batch_neighborhoods):
+                if len(neigh) > 0:
+                    neighbors_tensor[i, :len(neigh)] = torch.tensor(list(neigh), device=device, dtype=batch_doc_ids.dtype)
+
+            # Compare (B,1) vs (B,K) - (B,B,K)
+            match = batch_doc_ids.unsqueeze(0).unsqueeze(-1) == neighbors_tensor.unsqueeze(1)
+            # Collapse neighbor dimension - (B,B)
+            is_neighbor = match.any(dim=-1)
+
+            negative_mask = negative_mask & (~is_neighbor)
 
         negative_weights = negative_mask.float()
 
@@ -82,7 +88,7 @@ class NeighborhoodAwareContrastiveLoss(nn.Module):
             positive_values = exp_logits.diagonal()
         else:
             pos_weights = positive_mask.to(device=device, dtype=torch.float32)
-            positive_values = (exp_logits * pos_weights).sum(dim=1)/ pos_weights.sum(dim=1).clamp_min(1.0)
+            positive_values = ((exp_logits * pos_weights).sum(dim=1) / pos_weights.sum(dim=1).clamp_min(1.0))
 
         # Weighted InfoNCE Denominator
         # The denominator includes the retained negative mass only, after graph

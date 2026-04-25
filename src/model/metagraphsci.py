@@ -116,8 +116,9 @@ class MetaGraphSci(nn.Module):
         return self.ablation_study(h_text, h_meta, h_citation, ablation_mode or self.default_ablation_mode)
 
     def forward(
-        self, input_ids: Tensor, attention_mask: Tensor, venue_ids: Tensor, publisher_ids: Tensor,
-        author_ids: Tensor, years: Tensor, context_input_ids: Tensor, context_attention_mask: Tensor,
+        self, input_ids: Tensor, attention_mask: Tensor, venue_ids: Tensor, publisher_ids: Tensor, author_ids: Tensor, 
+        years: Tensor, 
+        context_input_ids: Tensor, context_attention_mask: Tensor,
         context_mask: Tensor, context_edge_types: Tensor, context_year_deltas: Tensor, context_scores: Tensor,
         context_hop_profiles: Tensor | None = None, context_spectral: Tensor | None = None,
         context_venue_ids: Tensor | None = None, context_publisher_ids: Tensor | None = None,

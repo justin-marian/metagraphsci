@@ -2,22 +2,23 @@ from typing import Sequence
 import numpy as np
 import polars as pl
 from sklearn.metrics import (
-    accuracy_score, balanced_accuracy_score, 
+    accuracy_score, balanced_accuracy_score,
     cohen_kappa_score, f1_score, log_loss, matthews_corrcoef,
     precision_recall_fscore_support, precision_score, recall_score, roc_auc_score)
 
 
-def to_frame(rows: list[dict]) -> pl.DataFrame:
-    return pl.DataFrame(rows)
+def multiclass_metrics(
+    y_true: np.ndarray, y_pred: np.ndarray,
+    y_prob: np.ndarray | None = None
+) -> dict[str, float]:
+    """
+    Collects the main summary indicators used in multiclass evaluation.
 
-
-def multiclass_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray | None = None) -> dict[str, float]:
-    """Aggregate metrics used for multiclass classification."""
-    # Aggregate Evaluation Summary
-    # Keep all top-level classification metrics in one function so training,
-    # validation, and testing all use the exact same statistical definitions.
-    # This avoids metric drift across scripts and guarantees that exported
-    # experiment tables remain directly comparable.
+    This centralizes the full evaluation summary so all stages use the same
+    statistical definitions and remain directly comparable across experiments.
+    """
+    # Keep the overall summary in a single place so training, validation,
+    # and testing always report the same quantities in the same format.
     metrics: dict[str, float] = {
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
@@ -26,13 +27,12 @@ def multiclass_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarra
         "weighted_f1": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)),
         "macro_precision": float(precision_score(y_true, y_pred, average="macro", zero_division=0)),
         "macro_recall": float(recall_score(y_true, y_pred, average="macro", zero_division=0)),
-        "mcc": float(matthews_corrcoef(y_true, y_pred)), "cohen_kappa": float(cohen_kappa_score(y_true, y_pred))
+        "mcc": float(matthews_corrcoef(y_true, y_pred)),
+        "cohen_kappa": float(cohen_kappa_score(y_true, y_pred))
     }
 
-    # Probability-aware Metrics
-    # Metrics like log-loss and AUROC require calibrated class probabilities
-    # rather than hard argmax predictions. These are optional because some
-    # baselines may only emit labels.
+    # Some indicators require confidence distributions rather than final labels.
+    # These are optional because not every baseline exposes calibrated scores.
     if y_prob is not None:
         metrics["log_loss"] = float(log_loss(y_true, y_prob, labels=np.arange(y_prob.shape[1])))
         try:
@@ -43,15 +43,31 @@ def multiclass_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarra
     return metrics
 
 
-def per_class_metrics(y_true: np.ndarray, y_pred: np.ndarray, label_names: Sequence[str] | None = None) -> pl.DataFrame:
-    """Build a class-level report with precision, recall, F1, and support."""
-    # Explicit Class Coverage
-    # Use the union of true and predicted labels so the report also captures
-    # degenerate cases where a class is predicted but absent in the ground truth,
-    # or present in the truth but never predicted.
+def per_class_metrics(
+    y_true: np.ndarray, y_pred: np.ndarray,
+    label_names: Sequence[str] | None = None
+) -> pl.DataFrame:
+    """
+    Builds a per-category report with precision, recall, F1, and support.
+
+    The report covers every category that appears either in the reference labels
+    or in the predictions, so rare or degenerate cases are still visible.
+    """
+    # Use the union of observed references and predictions so the report still
+    # exposes missing categories, over-predicted categories, or collapsed outputs.
     classes = np.unique(np.concatenate([y_true, y_pred]))
 
-    precision, recall, f1, support = precision_recall_fscore_support(y_true, y_pred, labels=classes, zero_division=0)
+    precision_arr, recall_arr, f1_arr, support_arr = precision_recall_fscore_support(
+        y_true, y_pred, labels=classes, zero_division=0
+    )
+
+    # Convert explicitly to arrays so static type checkers understand that
+    # the returned values are indexable sequences rather than scalar floats.
+    precision_arr = np.asarray(precision_arr, dtype=np.float64)
+    recall_arr = np.asarray(recall_arr, dtype=np.float64)
+    f1_arr = np.asarray(f1_arr, dtype=np.float64)
+    support_arr = np.asarray(support_arr, dtype=np.int64)
+
     rows: list[dict[str, int | float | str]] = []
 
     for idx, cls in enumerate(classes):
@@ -59,33 +75,47 @@ def per_class_metrics(y_true: np.ndarray, y_pred: np.ndarray, label_names: Seque
         class_name = (
             label_names[class_id]
             if label_names is not None and class_id < len(label_names)
-            else str(class_id))
+            else str(class_id)
+        )
 
         rows.append({
-            "class_id": class_id, "class_name": class_name,
-            "precision": float(precision[idx]), 
-            "recall": float(recall[idx]), 
-            "f1": float(f1[idx]),
-            "support": int(support[idx])
+            "class_id": class_id,
+            "class_name": class_name,
+            "precision": float(precision_arr[idx]),
+            "recall": float(recall_arr[idx]),
+            "f1": float(f1_arr[idx]),
+            "support": int(support_arr[idx])
         })
-    return to_frame(rows)
+
+    return pl.DataFrame(rows)
 
 
-def prediction_table(doc_ids: Sequence[int], y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray | None = None) -> pl.DataFrame:
-    """Build a per-document prediction table with confidence and correctness."""
-    # Prediction Audit Table
-    # Store one row per document so downstream analysis can inspect failure cases,
-    # calibration issues, hard examples, and semi-supervised pseudo-label quality
-    # without recomputing predictions from raw tensors.
+def prediction_table(
+    doc_ids: Sequence[int],
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_prob: np.ndarray | None = None
+) -> pl.DataFrame:
+    """
+    Builds a per-sample prediction table with confidence and correctness.
+
+    This makes downstream error analysis easier by preserving one row per sample,
+    including confidence and whether the final decision was correct.
+    """
+    # Keep a sample-level audit table so failure cases, calibration behavior,
+    # and difficult examples can be inspected without recomputing predictions.
     confidence = (
-        y_prob.max(axis=1) if y_prob is not None
-        else np.full(len(y_true), np.nan, dtype=np.float32))
+        y_prob.max(axis=1)
+        if y_prob is not None
+        else np.full(len(y_true), np.nan, dtype=np.float32)
+    )
 
     rows: list[dict[str, int | float]] = [{
         "doc_id": int(doc_id),
         "label": int(true_label),
         "prediction": int(pred_label),
-        "confidence": float(conf_score), 
-        "correct": int(true_label == pred_label)
+        "confidence": float(conf_score),
+        "correct": int(true_label == pred_label),
     } for doc_id, true_label, pred_label, conf_score in zip(doc_ids, y_true, y_pred, confidence)]
-    return to_frame(rows)
+
+    return pl.DataFrame(rows)

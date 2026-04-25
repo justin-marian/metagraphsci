@@ -21,28 +21,34 @@ class TextEncoder(nn.Module):
             raise ValueError("This encoder is intended for SciBERT only.")
 
         # 4-bit Quantization (QLoRA)
-        # NLP models are heavily memory-bound. QLoRA quantizes the frozen base model weights 
-        # to a 4-bit NormalFloat (NF4) data type, slashing VRAM usage by ~75%, pair this 
-        # with bfloat16 computation so the forward/backward passes and the tunable LoRA 
+        # NLP models are heavily memory-bound. QLoRA quantizes the frozen base model weights
+        # to a 4-bit NormalFloat (NF4) data type, slashing VRAM usage by ~75%, pair this
+        # with bfloat16 computation so the forward/backward passes and the tunable LoRA
         # adapters maintain high precision and numerical stability.
         optype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
         quantization_config = None
-        
+
         if peft_mode == "qlora":
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True, bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=optype)
 
-        self.backbone_pretrained = AutoAdapterModel.from_pretrained(
+        # Side-effect call that attaches adapter weights
+        # in-place and returns the adapter name string, NOT the model.  Assigning its
+        # return value to self.backbone replaced the model with a plain string, causing
+        # an AttributeError on the very next line (.config.hidden_size) and crashing
+        # every subsequent call to prepare_model_for_kbit_training, get_peft_model,
+        # freeze_backbone, and forward().
+        self.backbone = AutoAdapterModel.from_pretrained(
             model_name, low_cpu_mem_usage=low_cpu_mem_usage,
             torch_dtype=torch_dtype, quantization_config=quantization_config)
-        self.backbone = self.backbone_pretrained.load_adapter("allenai/scibert", source="hf", set_active=True)
+        self.backbone.load_adapter("allenai/scibert", source="hf", set_active=True)
         hidden_size = int(self.backbone.config.hidden_size)
 
         # Gradient Checkpointing
-        # Standard backpropagation stores all intermediate activations in memory to calculate 
-        # gradients later, which easily causes OOM errors on long sequences. 
-        # Checkpointing drops these activations and recomputes them on-the-fly during the 
+        # Standard backpropagation stores all intermediate activations in memory to calculate
+        # gradients later, which easily causes OOM errors on long sequences.
+        # Checkpointing drops these activations and recomputes them on-the-fly during the
         # backward pass. It trades a ~20% increase in compute time for massive memory savings.
         if gradient_checkpointing and hasattr(self.backbone, "gradient_checkpointing_enable"):
             self.backbone.gradient_checkpointing_enable()
@@ -50,15 +56,16 @@ class TextEncoder(nn.Module):
                 self.backbone.enable_input_require_grads()
 
         if peft_mode == "qlora":
-            self.backbone = prepare_model_for_kbit_training(self.backbone, use_gradient_checkpointing=gradient_checkpointing)
+            self.backbone = prepare_model_for_kbit_training(
+                self.backbone, use_gradient_checkpointing=gradient_checkpointing)
 
         if freeze_backbone_until_layer > 0:
             self.freeze_backbone(freeze_backbone_until_layer)
 
         # Low-Rank Adaptation (LoRA)
-        # Instead of updating all 110M+ parameters of SciBERT, freeze the network and 
-        # inject small, trainable low-rank matrices (A and B) into the Attention blocks. 
-        # This reduces trainable parameters to less than 1%, preventing catastrophic 
+        # Instead of updating all 110M+ parameters of SciBERT, freeze the network and
+        # inject small, trainable low-rank matrices (A and B) into the Attention blocks.
+        # This reduces trainable parameters to less than 1%, preventing catastrophic
         # forgetting of the base scientific vocabulary while drastically speeding up training.
         if peft_mode in {"lora", "qlora"}:
             target_modules = peft_target_modules or ("query", "value")
@@ -73,19 +80,20 @@ class TextEncoder(nn.Module):
     def freeze_backbone(self, num_layers: int) -> None:
         """Freezes the embedding layer and the bottom N transformer blocks."""
         # Partial Backbone Freezing
-        # In deep transformers, the lower layers learn universal, low-level syntactic 
-        # features (grammar, word boundaries), while upper layers learn highly task-specific 
-        # semantics. Freezing the bottom layers preserves the fundamental language model 
+        # In deep transformers, the lower layers learn universal, low-level syntactic
+        # features (grammar, word boundaries), while upper layers learn highly task-specific
+        # semantics. Freezing the bottom layers preserves the fundamental language model
         # structure, prevents overfitting on small datasets, and accelerates training.
         base_model = getattr(self.backbone, getattr(self.backbone, "base_model_prefix", ""), self.backbone)
         embeddings = getattr(base_model, "embeddings", None)
-        
+
         if embeddings is not None:
-            for p in embeddings.parameters(): p.requires_grad = False
-                
+            for p in embeddings.parameters():
+                p.requires_grad = False
+
         encoder = getattr(base_model, "encoder", None)
         layers = getattr(encoder, "layer", None)
-        
+
         if layers is not None:
             for layer in list(layers)[:max(0, num_layers)]:
                 for p in layer.parameters():
@@ -94,8 +102,8 @@ class TextEncoder(nn.Module):
     def forward(self, input_ids: Tensor, attention_mask: Tensor) -> Tensor:
         hidden_states = self.backbone(input_ids, attention_mask).last_hidden_state
         # [CLS] Token Pooling
-        # In BERT architectures, the special [CLS] token (at index 0) is designed to act 
-        # as an aggregated sequence-level representation because it has full, unmasked 
+        # In BERT architectures, the special [CLS] token (at index 0) is designed to act
+        # as an aggregated sequence-level representation because it has full, unmasked
         # bi-directional attention over the entire input sequence.
         cls_embedding = hidden_states[:, 0]
         if self.projection is not None:

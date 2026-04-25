@@ -11,15 +11,16 @@ import yaml
 from loguru import logger
 
 from .data import (
-    MultiScaleDocumentDataset, NeighborCache, build_loader, build_neighbor_cache,
+    MultiScaleDocumentDataset, NeighborCache, 
+    build_loader, build_neighbor_cache,
     create_encoders, create_low_label_split, create_tokenizer,
     load_citation_graph, load_documents, load_neighbor_cache,
     save_neighbor_cache, split_documents, split_graphs)
 from .model.metagraphsci import MetaGraphSci
 from train_eval import MetaGraphSciTrainerEval
 from .include import (
-    setup_global_logger,
-    PRIMARY_METRICS, aggregate_seed_results, plot_embedding_projection,
+    setup_global_logger, PRIMARY_METRICS, 
+    aggregate_seed_results, plot_embedding_projection,
     plot_seed_metric_trend, save_benchmark_table, save_evaluation_bundle, save_frame)
 
 
@@ -42,12 +43,20 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def labeled_prior(documents: pd.DataFrame, num_classes: int) -> list[float]:
+def labeled_prior(documents: pl.DataFrame, num_classes: int) -> list[float]:
     """Determines the empirical class distribution of the supervised subset."""
-    counts = documents["label"].dropna().astype(int).value_counts().sort_index()
     prior = np.zeros(num_classes, dtype=np.float32)
-    for label, count in counts.items(): 
-        prior[label] = float(count)
+    label_counts = (
+        documents.drop_nulls("label")
+        .with_columns(pl.col("label").cast(pl.Int64))
+        .group_by("label")
+        .agg(pl.len().alias("count"))
+        .sort("label")
+    )
+    for row in label_counts.iter_rows(named=True):
+        idx = int(row["label"])
+        if 0 <= idx < num_classes:
+            prior[idx] = float(row["count"])
     return (prior / np.maximum(prior.sum(), 1.0)).tolist()
 
 
@@ -131,7 +140,9 @@ def build_run_bundle(cfg: dict[str, Any], seed: int) -> dict[str, Any]:
             sampling_strategy=data_cfg["sampling_strategy"],
             connectivity_weight=data_cfg["connectivity_weight"], temporal_weight=data_cfg["temporal_weight"],
             reciprocity_weight=data_cfg["reciprocity_weight"], overlap_weight=data_cfg["overlap_weight"],
-            k_hops=data_cfg["k_hops"], spectral_dim=data_cfg["spectral_dim"], enable_spectral=data_cfg["enable_spectral"])
+            k_hops=data_cfg["k_hops"], spectral_dim=data_cfg["spectral_dim"], enable_spectral=data_cfg["enable_spectral"],
+            hub_degree_threshold=int(data_cfg.get("hub_degree_threshold", 0)),
+            max_graph_nodes_for_hops=int(data_cfg.get("max_graph_nodes_for_hops", 20_000)))
             
         save_neighbor_cache(cache, cache_path, expected_meta)
         return cache
@@ -149,7 +160,7 @@ def build_run_bundle(cfg: dict[str, Any], seed: int) -> dict[str, Any]:
         "test": build_dataset(test_docs, docs if data_cfg["graph_mode"] == "transductive" else test_docs, tokenizer, encoders, test_cache, data_cfg)
     }
 
-    num_classes = len(label_names) if label_names else int(len(sorted(docs["label"].dropna().astype(int).unique().tolist())))
+    num_classes = len(label_names) if label_names else int(docs.drop_nulls("label").select(pl.col("label").cast(pl.Int64)).n_unique())
     return {
         "documents": docs, "graph": graph, "label_names": label_names, "encoders": encoders, "datasets": datasets,
         "train_neighbor_cache": neighbor_sets(train_cache), "num_classes": num_classes, "labeled_prior": labeled_prior(labeled_docs, num_classes)

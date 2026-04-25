@@ -5,7 +5,7 @@ import numpy as np
 import polars as pl
 import seaborn as sns
 
-import umap
+import umap as umap_lib
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.calibration import calibration_curve
@@ -54,9 +54,9 @@ def plot_training_history(
     out_path = Path(output_path)
 
     selected_metrics = list(metrics or [
-        "train_loss", 
+        "train_loss",
         "val_loss", "val_accuracy", "val_macro_f1",
-        "val_balanced_accuracy",
+        "val_balanced_accuracy"
     ])
 
     available_metrics = [
@@ -201,11 +201,14 @@ def plot_pseudo_label_ratio(history_rows: Sequence[Mapping[str, Any]], output_pa
 
 def project_embeddings(embeddings: np.ndarray, method: str = "umap", random_state: int = 42) -> np.ndarray:
     """Project high-dimensional embeddings into two dimensions for visualization."""
+    # umap is imported here rather than at module level so that a missing
+    # umap-learn installation only raises an error when this function is
+    # actually called, not when any part of the include package is imported.
     projection_method = method.lower()
     array = np.asarray(embeddings)
 
     if projection_method == "umap":
-        reducer = umap.UMAP(n_components=2, random_state=random_state)
+        reducer = umap_lib.UMAP(n_components=2, random_state=random_state)
         return reducer.fit_transform(array)
 
     if projection_method == "tsne":

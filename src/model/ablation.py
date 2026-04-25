@@ -16,7 +16,7 @@ ABLATION_MODES: Final[dict[str, frozenset[str]]] = {
     "full": frozenset({"text", "metadata", "citation"}),
     "text_only": frozenset({"text"}),
     "text_metadata": frozenset({"text", "metadata"}),
-    "text_citation": frozenset({"text", "citation"}),
+    "text_citation": frozenset({"text", "citation"})
 }
 
 # Multi-Relational Graph Bias

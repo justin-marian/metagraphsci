@@ -8,6 +8,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+./data/
 out/
 downloads/
 eggs/
@@ -62,3 +63,6 @@ dmypy.json
 
 # PyPI configuration file
 .pypirc
+.cache/
+data/
+dump_test.py

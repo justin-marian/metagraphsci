@@ -1,171 +1,225 @@
+"""
+Utility helpers for exporting, normalising, and reading dataset bundles.
+
+Fetching/labeling layer and the on-disk representation: 
+schema normalisation, YAML config generation, and generic table I/O for several file formats.
+"""
+
+from __future__ import annotations
+
 import json
 import shutil
 import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any
+
 import polars as pl
 import yaml
 
-from constants import BENCHMARK_DEFAULTS, DOCUMENT_COLUMNS, REQUIRED_COLUMNS
+from constants import BENCHMARK_DEFAULTS, BENCHMARK_RUN_PREFIX, DOCUMENT_COLUMNS, REQUIRED_COLUMNS
 
 
 def save_frame(df: pl.DataFrame, path: Path) -> None:
-    """Save a Polars DataFrame to disk, supporting both Parquet and CSV."""
-    # Dual Format Support
-    # CSV is kept for human-readability and legacy compatibility, but Parquet 
-    # is supported (and preferred) because it preserves strict data types 
-    # (LIKE Int64 vs Float64) and reads significantly faster for large graphs.
+    """
+    Write a DataFrame using the format implied by the destination file suffix.
+
+    .parquet => write_parquet; any other suffix => write_csv. 
+    Parent directories are created automatically so the caller does not need to mkdir beforehand.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path) if path.suffix == ".parquet" else df.write_csv(path)
 
 
 def empty_citations() -> pl.DataFrame:
-    """Generate an empty citation dataframe with strict typing."""
-    # Strict Schema Fallbacks
-    # If a dataset lacks a citation graph (e.g., text-only baselines), must return 
-    # an empty frame rather than `None`. Explicitly defining `pl.Int64` ensures that 
-    # downstream operations (like PyTorch tensor casting) don't crash trying to infer 
-    # types from a 0-row table.
+    """Return an empty citation table with an explicit integer schema.
+
+    Having an explicit dtype prevents Polars from defaulting to Utf8 on the
+    empty frame, which would cause a schema mismatch when concatenating with
+    real citation tables later.
+    """
     return pl.DataFrame({
-        "source": pl.Series(name="source", values=[], dtype=pl.Int64), 
-        "target": pl.Series(name="target", values=[], dtype=pl.Int64)
+        "source": pl.Series("source", [], dtype=pl.Int64),
+        "target": pl.Series("target", [], dtype=pl.Int64)
     })
 
 
-def ensure_required_columns(df: pl.DataFrame) -> pl.DataFrame:
-    """Fill missing columns and reorder fields to match the project schema."""
-    # Defensive Data Normalization
-    # External datasets are incredibly messy. Instead of littering the training loop 
-    # with `if "abstract" in row:` checks, we force all incoming tables into a 
-    # rigid, unified schema right at the ingestion boundary. Missing fields are 
-    # filled with safe defaults so the Dataset/Model logic remains completely agnostic 
-    # to the original data source's quirks.
-    defaults: dict[str, Any] = {"title": "", "abstract": "", "venue": "", "publisher": "", "authors": "", "year": None}
-    out = df.with_row_index("doc_id") if "doc_id" not in df.columns else df
+def document_defaults() -> dict[str, Any]:
+    """
+    Columns that may be absent from a raw document table.
 
-    for col in REQUIRED_COLUMNS:
-        if col not in out.columns:
-            out = out.with_columns(pl.lit(defaults[col]).alias(col))
+    Fill missing columns with safe neutral values rather than raising an error.
+    """
+    return {"title": "", "abstract": "", "venue": "", "publisher": "", "authors": "", "year": None}
+
+
+def ensure_required_columns(df: pl.DataFrame) -> pl.DataFrame:
+    """Normalise an arbitrary document table to the project schema.
+
+    Steps
+    -----
+    1. Add a 'doc_id' column via row index when it is absent.
+    2. Fill any missing REQUIRED_COLUMNS with their default values.
+    3. Validate that a 'label' column is present (required for training).
+    4. Reorder to DOCUMENT_COLUMNS prefix followed by any extra columns.
+
+    After this function runs, downstream code can assume a stable column order
+    with safe defaults for all required metadata fields.
+
+    Raises ValueError when the 'label' column is missing.
+    """
+    out = df.with_row_index("doc_id") if "doc_id" not in df.columns else df
+    defaults = document_defaults()
+
+    for column in REQUIRED_COLUMNS:
+        if column not in out.columns:
+            out = out.with_columns(pl.lit(defaults[column]).alias(column))
 
     if "label" not in out.columns:
         raise ValueError("documents frame must include a 'label' column")
 
-    # Reorder columns: required fields first, followed by any original extra metadata
-    ordered = [c for c in DOCUMENT_COLUMNS if c in out.columns]
-    extra = [c for c in out.columns if c not in ordered]
+    # Preserve the canonical column order while keeping any user-defined extras.
+    ordered = [col for col in DOCUMENT_COLUMNS if col in out.columns]
+    extra   = [col for col in out.columns if col not in ordered]
     return out.select(ordered + extra)
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Config template not found: {path}")
-    return yaml.safe_load(path.read_text()) or {}
+    """Load a YAML file into a dictionary with a clear error when it is missing."""
+    config_path = Path(path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config template not found: {config_path}")
+    return yaml.safe_load(config_path.read_text()) or {}
 
 
-def save_benchmark_config(dataset_name: str, out_dir: Path, config_template: str | Path) -> None:
-    """Write a benchmark-specific config next to the exported dataset files."""
-    # Code-Config-Data Coupling
-    # To guarantee reproducibility, the script that downloads and builds the data 
-    # also generates the training config. This ensures that the dataset's specific 
-    # requirements (like evaluation split strategies) are hardcoded into the yaml 
-    # file that the trainer will eventually use, eliminating human configuration error.
-    cfg = load_yaml(config_template)
-    cfg.setdefault("project", {})
-    cfg.setdefault("data", {})
+def save_benchmark_config(
+    dataset_name: str, out_dir: Path, config_template: str | Path,
+    run_prefix: str = BENCHMARK_RUN_PREFIX) -> None:
+    """
+    Generate the dataset-specific training config next to the exported CSV files.
 
-    cfg["project"]["benchmark"] = dataset_name
-    cfg["project"]["run_name"] = f"MetaGraphSci_{dataset_name}"
-    cfg["data"].update({
-        "documents": str(out_dir / "documents.csv"),
-        "citations": str(out_dir / "citations.csv"),
-        "baselines": str(out_dir / "baselines.csv")
+    The function deep-merges dataset paths and split settings into the provided
+    YAML template so the caller only needs to maintain one base config that
+    gets patched for each new dataset.
+
+    The run_prefix parameter defaults to BENCHMARK_RUN_PREFIX (constants.py).
+    Override it to distinguish different model families in experiment logs.
+    """
+    config = load_yaml(config_template)
+    config.setdefault("project", {})
+    config.setdefault("data", {})
+
+    config["project"]["benchmark"]  = dataset_name
+    config["project"]["run_name"]   = f"{run_prefix}_{dataset_name}"
+    config["project"]["output_dir"] = f"runs/{run_prefix}"
+    config["project"]["cache_dir"]  = f"cache/{run_prefix}"
+
+    # Merge dataset-specific paths and split defaults from BENCHMARK_DEFAULTS.
+    config["data"].update({
+        "documents":    str(out_dir / "documents.csv"),
+        "citations":    str(out_dir / "citations.csv"),
+        "baselines":    str(out_dir / "baselines.csv"),
+        "label_column": "label", "source_col": "source", "target_col": "target",
+        **BENCHMARK_DEFAULTS[dataset_name]
     })
 
-    for k, v in BENCHMARK_DEFAULTS[dataset_name].items():
-        cfg["data"][k] = v
-
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    (out_dir / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
 
 
 def save_dataset_bundle(
-    dataset_name: str, out_dir: str | Path, documents: pl.DataFrame,
-    config_template: str | Path, citations: pl.DataFrame | None = None) -> None:
-    """Export normalized tables and generate the config used by the pipeline."""
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    dataset_name: str, out_dir:  str | Path,
+    documents: pl.DataFrame, config_template: str | Path, citations: pl.DataFrame | None) -> None:
+    """
+    Export normalised document and citation tables together with a matching config.
 
-    docs = ensure_required_columns(documents)
-    cits = citations if citations is not None else empty_citations()
+    One-stop function for writing a complete dataset bundle:
+        - documents.csv (schema-normalised via ensure_required_columns)
+        - citations.csv (empty placeholder when citations is None)
+        - config.yaml   (generated from the template)
+    """
+    output_dir = Path(out_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_frame(ensure_required_columns(documents), output_dir / "documents.csv")
+    save_frame(citations if citations is not None else empty_citations(), output_dir / "citations.csv")
+    save_benchmark_config(dataset_name, output_dir, config_template)
 
-    save_frame(docs, out / "documents.csv")
-    save_frame(cits, out / "citations.csv")
-    save_benchmark_config(dataset_name, out, config_template)
 
+def mask_to_split(train_mask: Any, val_mask: Any, test_mask: Any) -> list[str]:
+    """
+    Convert boolean split masks into an explicit per-row split label column.
 
-def mask_to_split(train_mask, val_mask, test_mask) -> list[str]:
-    """Convert boolean split masks into human-readable split names."""
-    # Tabular Split Tracking over Graph Masks
-    # PyTorch Geometric natively uses parallel boolean tensors (train_mask, val_mask) 
-    # mapped to node indices. This is brittle if the graph nodes get reshuffled. 
-    # By converting these masks into an explicit string column ("train", "val", "test") 
-    # attached to the document dataframe, we can safely filter, sort, and sample the 
-    # tabular data without losing the evaluation boundaries.
-    split: list[str] = []
-    for is_t, is_v, is_te in zip(train_mask.tolist(), val_mask.tolist(), test_mask.tolist()):
-        if is_t: 
-            split.append("train")
-        elif is_v:
-            split.append("val")
-        elif is_te: 
-            split.append("test")
-        else: 
-            split.append("unassigned")
-    return split
+    Iterates the three masks in lock-step and assigns the label of whichever
+    mask is True. Rows that are False in all three masks are labelled 'unassigned'; 
+    this indicates a data preparation error and should be investigated.
+    """
+    splits: list[str] = []
+    for is_train, is_val, is_test in zip(train_mask.tolist(), val_mask.tolist(), test_mask.tolist()):
+        if is_train:
+            splits.append("train")
+        elif is_val:
+            splits.append("val")
+        elif is_test:
+            splits.append("test")
+        else:
+            splits.append("unassigned")
+    return splits
 
 
 def download_file(url: str, path: Path) -> None:
+    """Download a remote file to disk, creating parent directories as needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(url) as response, path.open("wb") as file_handle:
-        shutil.copyfileobj(response, file_handle)
+    with urllib.request.urlopen(url) as response, path.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
 
 
 def extract_zip(zip_path: Path, out_dir: Path) -> None:
+    """Extract a zip archive into the target directory."""
     with zipfile.ZipFile(zip_path, "r") as archive:
         archive.extractall(out_dir)
 
 
 def find_candidates(root: Path, patterns: tuple[str, ...]) -> list[Path]:
-    """Find candidate files matching a set of glob patterns."""
-    found: list[Path] = []
-    for p in patterns:
-        found.extend(root.rglob(p))
-    return sorted({p for p in found if p.is_file()})
+    """
+    Recursively collect files matching any of the provided glob patterns.
+
+    Uses a set internally to deduplicate paths that match multiple patterns,
+    then returns a sorted list for deterministic ordering.
+    """
+    found: set[Path] = set()
+    for pattern in patterns:
+        found.update(path for path in root.rglob(pattern) if path.is_file())
+    return sorted(found)
+
+
+def frame_from_json_payload(payload: Any, path: Path) -> pl.DataFrame:
+    """Convert a supported JSON payload shape into a Polars DataFrame.
+
+    Supported shapes
+    ----------------
+    - A top-level JSON array:            [{...}, {...}, ...]
+    - A dict with a well-known list key: {"rows": [...]} / {"data": [...]} /
+                                         {"documents": [...]} / {"records": [...]}
+
+    Raises ValueError for any other shape.
+    """
+    if isinstance(payload, list):
+        return pl.DataFrame(payload)
+    if isinstance(payload, dict):
+        for key in ("rows", "data", "documents", "records"):
+            if isinstance(value := payload.get(key), list):
+                return pl.DataFrame(value)
+    raise ValueError(f"Unsupported JSON table structure in: {path}")
 
 
 def read_table(path: Path) -> pl.DataFrame:
-    """Robust I/O reader supporting multiple tabular and JSON layouts."""
-    # Flexible Ingestion
-    # Academic datasets are distributed in wildly inconsistent formats. 
-    # This unified reader attempts to parse standard tables (CSV/Parquet) and 
-    # heuristically unpacks nested JSON structures (extracting lists of records 
-    # hidden behind "data" or "rows" keys) so the pipeline doesn't crash on new formats.
-    if path.suffix == ".csv": 
+    """Read a supported tabular file into a Polars DataFrame."""
+    if path.suffix == ".csv":
         return pl.read_csv(path)
-    if path.suffix == ".parquet": 
+    if path.suffix == ".parquet":
         return pl.read_parquet(path)
-    if path.suffix == ".jsonl": 
+    if path.suffix == ".jsonl":
         return pl.read_ndjson(path)
-    
     if path.suffix == ".json":
-        payload = json.loads(path.read_text())
-        if isinstance(payload, list): 
-            return pl.DataFrame(payload)
-        if isinstance(payload, dict):
-            for key in ("rows", "data", "documents", "records"):
-                if key in payload and isinstance(payload[key], list):
-                    return pl.DataFrame(payload[key])
-        raise ValueError(f"Unsupported JSON table structure: {path}")
-    raise ValueError(f"Unsupported table format: {path.suffix}")
+        return frame_from_json_payload(json.loads(path.read_text()), path)
+    raise ValueError(f"Unsupported table format: {path.suffix!r}")
