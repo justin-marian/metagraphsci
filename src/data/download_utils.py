@@ -17,7 +17,7 @@ from typing import Any
 import polars as pl
 import yaml
 
-from constants import BENCHMARK_DEFAULTS, BENCHMARK_RUN_PREFIX, DOCUMENT_COLUMNS, REQUIRED_COLUMNS
+from constants import BENCHMARK_DEFAULTS_DATASETS, BENCHMARK_RUN_PREFIX, DOCUMENT_COLUMNS, REQUIRED_COLUMNS
 
 
 def save_frame(df: pl.DataFrame, path: Path) -> None:
@@ -120,7 +120,7 @@ def save_benchmark_config(
         "citations":    str(out_dir / "citations.csv"),
         "baselines":    str(out_dir / "baselines.csv"),
         "label_column": "label", "source_col": "source", "target_col": "target",
-        **BENCHMARK_DEFAULTS[dataset_name]
+        **BENCHMARK_DEFAULTS_DATASETS[dataset_name]
     })
 
     out_dir.mkdir(parents=True, exist_ok=True)

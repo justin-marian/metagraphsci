@@ -11,31 +11,51 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from domain_configs import DOMAIN_REGISTRY
-from downloaders import download_openalex_query
+from downloaders import (
+    download_forc2025, download_ogbn_arxiv,
+    download_openalex,  download_planetoid_dataset)
+
+
+DEFAULT_CONFIG_TEMPLATE = Path(__file__).resolve().parents[2] / "configs" / "config.yaml"
+
+
+"""Download and normalize supported benchmarks for MetaGraphSci.
+
+- fetch supported benchmarks from their original sources,
+- map heterogeneous fields onto the shared project schema,
+- export normalized documents and citations tables,
+- generate a matching config so experiments can start immediately.
+"""
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse and return command-line arguments for dataset construction."""
-    parser = argparse.ArgumentParser(description="Build a MetaGraphSci dataset from OpenAlex.", formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
-    # --- Core options ---
-    parser.add_argument("--domain", default="cs_ai", choices=list(DOMAIN_REGISTRY.keys()), help="Research domain to build. Default: cs_ai.")
-    parser.add_argument("--out_dir", required=True, type=Path, help="Output directory for documents.csv, citations.csv and config.yaml.")
-    parser.add_argument("--config_template", default="configs/config.yaml", type=Path, help="Base YAML config patched with dataset-specific paths and settings.",)
-    # --- Fetch options ---
-    fetch = parser.add_argument_group("Fetch options")
-    fetch.add_argument("--query", type=str, default=None, metavar="TEXT", help="Optional free-text prefix applied to every per-class sub-query.")
-    fetch.add_argument("--max_papers", type=int, metavar="N", help="Total papers across all classes.",)
-    fetch.add_argument("--papers_per_class", type=int, default=None, metavar="N", help="Hard per-class cap. Overrides max_papers // n_classes when set.")
-    fetch.add_argument("--classes", nargs="+", default=None, metavar="CLASS", help="Subset of label classes to include for the selected domain.")
-    fetch.add_argument("--from_year", type=int, default=None, metavar="YYYY", help="Earliest publication year, inclusive.")
-    fetch.add_argument("--to_year", type=int, default=None, metavar="YYYY", help="Latest publication year, inclusive.")
-    fetch.add_argument("--no_citations", action="store_true", default=False, help="Skip citation graph creation and emit an empty citations.csv.")
-    fetch.add_argument("--no_expand", action="store_true", default=False, help=(
-        "Disable the citation-network expansion pass. By default the builder fetches the most cross-referenced external papers to raise "
-        "citation density (avg deg << 1 without it). Use --no_expand only for fast debug runs."))
-    fetch.add_argument("--llm_fallback", action="store_true", default=False, help="Use the Claude API for papers with no structural label signal.")
-    fetch.add_argument("--llm_api_key", type=str, default=None, metavar="KEY", help="Anthropic API key. Falls back to ANTHROPIC_API_KEY env var if omitted.")
+    """Parse command-line arguments for dataset download commands."""
+    parser = argparse.ArgumentParser(description="Download datasets used by the MetaGraphSci analysis pipeline.")
+
+    parser.add_argument("--dataset", required=True, choices=["cora", "pubmed", "ogbn_arxiv", "forc4cl", "openalex"], help="Target benchmark to process.")
+    parser.add_argument("--out_dir", required=True, type=Path, help="Output directory for normalized tables and configs.")
+    parser.add_argument("--config_template", default=DEFAULT_CONFIG_TEMPLATE, type=Path, help="Base YAML config template to clone.")
+
+    parser.add_argument("--oa_filter", default="primary_topic.field.id:17",
+                        help=("OpenAlex /works filter expression. OpenAlex only filters topics by ID, not display name. "
+                              "Examples: 'primary_topic.field.id:17' (Computer Science), "
+                              "'primary_topic.subfield.id:1702' (Artificial Intelligence), "
+                              "'primary_topic.id:T10320' (a specific topic). "
+                              "Browse IDs at https://api.openalex.org/fields and /subfields."))
+    parser.add_argument("--oa_max_works", default=50_000, type=int, help="Maximum number of OpenAlex works to fetch.")
+    parser.add_argument("--oa_email", default="", help="Contact email for the OpenAlex polite pool (higher rate limits).")
+    parser.add_argument("--oa_label_field", default="field", choices=["field", "subfield", "topic", "domain"],
+                        help="Which level of the OpenAlex topic hierarchy to use as the classification label.")
+    parser.add_argument("--oa_workers", default=1, type=int,
+                        help="Number of parallel download workers. 1 (default) = serial. "
+                             "Workers partition the [--oa_year_min, --oa_year_max] range into disjoint year buckets. "
+                             "Recommended max ~4 to stay within the OpenAlex polite-pool rate limit.")
+    parser.add_argument("--oa_year_min", default=2000, type=int,
+                        help="Lower bound (inclusive) for year-based parallel partitioning. Ignored if --oa_workers=1.")
+    parser.add_argument("--oa_year_max", default=None, type=int,
+                        help="Upper bound (inclusive) for year-based parallel partitioning. Defaults to the current year. "
+                             "Ignored if --oa_workers=1.")
+
     return parser.parse_args()
 
 
@@ -95,24 +115,26 @@ def print_summary(
 def main() -> None:
     """Run the full CLI workflow: validate → summarise → delegate to downloader."""
     args = parse_args()
-    validate_args(args)
-    classes, papers_per_class, total_target = resolve_target_sizes(args)
-    print_summary(args, classes, papers_per_class, total_target)
-
-    download_openalex_query(
-        out_dir=args.out_dir,
-        config_template=args.config_template,
-        query=args.query,
-        max_papers=args.max_papers,
-        from_year=args.from_year,
-        to_year=args.to_year,
-        include_citations=not args.no_citations,
-        expand_citations=not args.no_expand,
-        use_llm_fallback=args.llm_fallback,
-        llm_api_key=args.llm_api_key,
-        papers_per_class=args.papers_per_class,
-        classes=args.classes,
-        domain=args.domain)
+    if args.dataset == "cora":
+        download_planetoid_dataset("Cora", args.out_dir, args.config_template)
+    elif args.dataset == "pubmed":
+        download_planetoid_dataset("PubMed", args.out_dir, args.config_template)
+    elif args.dataset == "ogbn_arxiv":
+        download_ogbn_arxiv(args.out_dir, args.config_template)
+    elif args.dataset == "forc4cl":
+        download_forc2025(args.out_dir, args.config_template)
+    elif args.dataset == "openalex":
+        download_openalex(
+            args.out_dir,
+            args.config_template,
+            filter_str=args.oa_filter,
+            max_works=args.oa_max_works,
+            email=args.oa_email,
+            label_field=args.oa_label_field,
+            workers=args.oa_workers,
+            year_min=args.oa_year_min,
+            year_max=args.oa_year_max,
+        )
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ updating it here is sufficient; no other module should embed a raw numeric liter
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, Final
 
 from torch_geometric.data import Data
 
@@ -19,6 +19,52 @@ from torch_geometric.data import Data
 # Default run-name prefix embedded in auto-generated benchmark YAML configs.
 # Change to reflect a different base model or experiment family.
 BENCHMARK_RUN_PREFIX: str = "citescibert"
+
+# Standardized Evaluation Constraints
+# Different graph datasets require fundamentally different validation strategies to prevent data leakage. 
+# - 'ogbn_arxiv' uses 'time' splits to ensure the model isn't using future papers 
+#   to predict the topics of past papers (temporal leakage).
+# - 'cora'/'pubmed' are historically evaluated with 'random' splits.
+# Baking this into the pipeline ensures evaluation rigor is strictly tied to the 
+# dataset's properties, preventing accidental benchmark cheating.
+BENCHMARK_DEFAULTS_DATASETS: Final[dict[str, dict[str, str]]] = {
+    "generic": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "random"},
+    "cora": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "random"},
+    "pubmed": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "random"},
+    "ogbn_arxiv": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "time"},
+    "forc4cl": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "time"},
+    "openalex": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "time"},
+}
+
+FORC2025_URL: Final[str] = "https://zenodo.org/records/14901529/files/FoRC2025_data.zip?download=1"
+
+DATASET_REGISTRY: Final[dict[str, dict[str, str]]] = {
+    "cora": {
+        "name": "Cora",
+        "source": "planetoid",
+        "split_strategy": "random",
+    },
+    "pubmed": {
+        "name": "PubMed",
+        "source": "planetoid",
+        "split_strategy": "random",
+    },
+    "ogbn_arxiv": {
+        "name": "ogbn_arxiv",
+        "source": "ogb",
+        "split_strategy": "time",
+    },
+    "forc4cl": {
+        "name": "forc4cl",
+        "source": "zenodo",
+        "split_strategy": "time",
+    },
+    "openalex": {
+        "name": "openalex",
+        "source": "openalex",
+        "split_strategy": "time",
+    },
+}
 
 
 #######################################################################################

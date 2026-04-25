@@ -63,6 +63,44 @@ dmypy.json
 
 # PyPI configuration file
 .pypirc
+
+# Local tests
+tests/
+
+# Local data and run logs
+logs/
+data/
+*.log
+*.pid
+
+# Model training outputs and caches
+runs/
+cache/
+checkpoints/
+*.pt
+*.ckpt
+*.bin
+*.safetensors
+
+# Experiment trackers
+mlruns/
+wandb/
+.mlflow/
+
+# Editors and tools
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+CLAUDE.md.local
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
 .cache/
 data/
 dump_test.py
