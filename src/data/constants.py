@@ -74,5 +74,6 @@ BENCHMARK_DEFAULTS: Final[dict[str, dict[str, str]]] = {
     "cora": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "random"},
     "pubmed": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "random"},
     "ogbn_arxiv": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "time"},
-    "forc4cl": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "time"}
+    "forc4cl": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "time"},
+    "openalex": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "time"},
 }

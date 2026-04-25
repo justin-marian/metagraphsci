@@ -64,12 +64,12 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     return yaml.safe_load(path.read_text()) or {}
 
 
-def save_benchmark_config(dataset_name: str, out_dir: Path, config_template: str | Path) -> None:
+def save_benchmark_config(dataset_name: str, out_dir: Path, config_template: str | Path, file_ext: str = "csv") -> None:
     """Write a benchmark-specific config next to the exported dataset files."""
     # Code-Config-Data Coupling
-    # To guarantee reproducibility, the script that downloads and builds the data 
-    # also generates the training config. This ensures that the dataset's specific 
-    # requirements (like evaluation split strategies) are hardcoded into the yaml 
+    # To guarantee reproducibility, the script that downloads and builds the data
+    # also generates the training config. This ensures that the dataset's specific
+    # requirements (like evaluation split strategies) are hardcoded into the yaml
     # file that the trainer will eventually use, eliminating human configuration error.
     cfg = load_yaml(config_template)
     cfg.setdefault("project", {})
@@ -78,9 +78,9 @@ def save_benchmark_config(dataset_name: str, out_dir: Path, config_template: str
     cfg["project"]["benchmark"] = dataset_name
     cfg["project"]["run_name"] = f"MetaGraphSci_{dataset_name}"
     cfg["data"].update({
-        "documents": str(out_dir / "documents.csv"),
-        "citations": str(out_dir / "citations.csv"),
-        "baselines": str(out_dir / "baselines.csv")
+        "documents": str(out_dir / f"documents.{file_ext}"),
+        "citations": str(out_dir / f"citations.{file_ext}"),
+        "baselines": str(out_dir / f"baselines.{file_ext}"),
     })
 
     for k, v in BENCHMARK_DEFAULTS[dataset_name].items():
