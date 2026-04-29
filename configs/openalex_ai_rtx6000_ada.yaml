@@ -1,8 +1,8 @@
 project:
   benchmark: openalex_ai
-  run_name: MetaGraphSci_openalex_ai_smoke
-  output_dir: runs/openalex_ai_smoke
-  cache_dir: cache/openalex_ai   # shared with full config so caches are reused
+  run_name: MetaGraphSci_openalex_ai_rtx6000_ada
+  output_dir: runs/openalex_ai_rtx6000_ada
+  cache_dir: cache/openalex_ai
 data:
   documents: data/openalex_ai/documents.parquet
   citations: data/openalex_ai/citations.parquet
@@ -41,6 +41,7 @@ model:
   lora_r: 8
   lora_alpha: 16
   lora_dropout: 0.1
+  # Mandatory on 48GB Ada — without it, batch_size > ~12 will OOM with seq 512 + context 18.
   gradient_checkpointing: true
   freeze_backbone_until_layer: 6
   citation_heads: 4
@@ -54,20 +55,28 @@ model:
   latent_graph_top_k: 4
   hybrid_alpha_init: -2.0
 train:
-  # Smoke test: 1 seed × 1 ablation × 1+1 epochs to validate end-to-end.
-  # batch_size 64 is tuned for H200 (141GB). For RTX 6000 Ada (48GB) use the
-  # dedicated configs/openalex_ai_rtx6000_ada_smoke.yaml instead — batch 64 OOMs there.
-  batch_size: 64
-  num_workers: 8
-  pretrain_epochs: 1
-  finetune_epochs: 1
+  # RTX 6000 Ada (48 GB GDDR6, ~91 BF16 TFLOPS).
+  # Effective batch = batch_size * grad_accum = 24 * 2 = 48 (matches A100-40 class).
+  # If you see headroom in nvidia-smi after the first few steps, try batch_size: 32, grad_accum: 1.
+  # If you OOM, drop to batch_size: 16, grad_accum: 3.
+  batch_size: 24
+  num_workers: 4
+  pretrain_epochs: 2
+  finetune_epochs: 3
   seeds:
     - 42
+    - 1337
+    - 2025
   ablations:
     - full
+    - text_only
+    - text_metadata
+    - text_citation
 trainer:
+  # train_nvidia.sh exports ACCELERATE_MIXED_PRECISION=bf16 on Ampere+ (incl. Ada),
+  # which overrides this. Kept as fp16 only as a fallback for older GPUs.
   mixed_precision: fp16
-  gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 2
   pretrain_lr: 2.0e-05
   finetune_lr: 1.0e-05
   weight_decay: 0.01
@@ -84,6 +93,6 @@ trainer:
     min_per_class: 1
     ema_momentum: 0.9
     distributionalignment: true
-  use_mlflow: false   # avoid polluting the real experiment tracking server
-  mlflow_experiment: MetaGraphSci_openalex_ai_smoke
+  use_mlflow: true
+  mlflow_experiment: MetaGraphSci_openalex_ai
   use_wandb: false

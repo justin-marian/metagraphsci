@@ -1,7 +1,7 @@
 project:
   benchmark: openalex_ai
-  run_name: MetaGraphSci_openalex_ai_smoke
-  output_dir: runs/openalex_ai_smoke
+  run_name: MetaGraphSci_openalex_ai_rtx6000_ada_smoke
+  output_dir: runs/openalex_ai_rtx6000_ada_smoke
   cache_dir: cache/openalex_ai   # shared with full config so caches are reused
 data:
   documents: data/openalex_ai/documents.parquet
@@ -54,11 +54,10 @@ model:
   latent_graph_top_k: 4
   hybrid_alpha_init: -2.0
 train:
-  # Smoke test: 1 seed × 1 ablation × 1+1 epochs to validate end-to-end.
-  # batch_size 64 is tuned for H200 (141GB). For RTX 6000 Ada (48GB) use the
-  # dedicated configs/openalex_ai_rtx6000_ada_smoke.yaml instead — batch 64 OOMs there.
-  batch_size: 64
-  num_workers: 8
+  # Smoke test on RTX 6000 Ada (48GB): same batch_size as the full Ada config
+  # so we exercise real memory pressure, but only 1 seed × 1 ablation × 1+1 epochs.
+  batch_size: 24
+  num_workers: 4
   pretrain_epochs: 1
   finetune_epochs: 1
   seeds:
@@ -67,7 +66,7 @@ train:
     - full
 trainer:
   mixed_precision: fp16
-  gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 2
   pretrain_lr: 2.0e-05
   finetune_lr: 1.0e-05
   weight_decay: 0.01
@@ -84,6 +83,6 @@ trainer:
     min_per_class: 1
     ema_momentum: 0.9
     distributionalignment: true
-  use_mlflow: false   # avoid polluting the real experiment tracking server
+  use_mlflow: false
   mlflow_experiment: MetaGraphSci_openalex_ai_smoke
   use_wandb: false
