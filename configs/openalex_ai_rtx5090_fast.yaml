@@ -60,7 +60,7 @@ train:
   # and the 32GB ceiling is still well above what we need (~14 GB).
   # If you OOM on the first step, drop to batch_size: 48.
   batch_size: 64
-  num_workers: 4
+  num_workers: 8
   pretrain_epochs: 1
   finetune_epochs: 2
   seeds:
@@ -69,7 +69,7 @@ train:
     - full
     - text_only
 trainer:
-  mixed_precision: fp16
+  mixed_precision: bf16
   gradient_accumulation_steps: 1
   pretrain_lr: 2.0e-05
   finetune_lr: 1.0e-05

@@ -110,7 +110,8 @@ class MetaGraphSciTrainerEval:
     def optimizer(self, stage: str) -> AdamW:
         """Provisions an optimizer with learning rates tailored to the training stage."""
         learning_rate = float(self.cfg["pretrain_lr"] if stage == "pretrain" else self.cfg["finetune_lr"])
-        return AdamW(self.model.parameters(), lr=learning_rate, weight_decay=float(self.cfg["weight_decay"]))
+        fused = torch.cuda.is_available()
+        return AdamW(self.model.parameters(), lr=learning_rate, weight_decay=float(self.cfg["weight_decay"]), fused=fused)
 
     def extract_context_tensors(self, batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
         """Filters the batch to strictly isolate bounded citation-context tensors."""
