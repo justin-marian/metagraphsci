@@ -28,7 +28,10 @@ $req = Get-Content requirements.txt | Where-Object {
 }
 $req | Set-Content requirements.intel.txt
 pip install -r requirements.intel.txt
-pip install -e .
+# --no-deps: setup.py's install_requires reads the unfiltered requirements.txt,
+# which would re-pull deepspeed / bitsandbytes (CUDA-only, broken on Windows).
+# Deps were already installed from requirements.intel.txt above.
+pip install -e . --no-deps
 
 # 4) Verify XPU is visible
 Write-Host "[4/4] Verifying Intel XPU runtime..." -ForegroundColor Yellow

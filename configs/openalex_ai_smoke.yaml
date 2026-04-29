@@ -1,8 +1,8 @@
 project:
   benchmark: openalex_ai
-  run_name: MetaGraphSci_openalex_ai_nvidia
-  output_dir: runs/openalex_ai_nvidia
-  cache_dir: cache/openalex_ai
+  run_name: MetaGraphSci_openalex_ai_smoke
+  output_dir: runs/openalex_ai_smoke
+  cache_dir: cache/openalex_ai   # shared with full config so caches are reused
 data:
   documents: data/openalex_ai/documents.parquet
   citations: data/openalex_ai/citations.parquet
@@ -54,24 +54,16 @@ model:
   latent_graph_top_k: 4
   hybrid_alpha_init: -2.0
 train:
-  # NVIDIA: large GPU memory (A100/H100/4090/3090). Tune batch_size per GPU class:
-  #   24GB (3090/4090):    batch_size: 16, grad_accum 2
-  #   40GB (A100 40):      batch_size: 32, grad_accum 1
-  #   80GB (A100/H100 80): batch_size: 48, grad_accum 1
-  #   141GB (H200):        batch_size: 64, grad_accum 1  (try 96 if memory allows)
+  # Smoke test: same batch_size as production so we exercise real memory pressure,
+  # but only 1 seed × 1 ablation × 1+1 epochs to validate end-to-end in ~15-30 min.
   batch_size: 64
   num_workers: 8
-  pretrain_epochs: 2
-  finetune_epochs: 3
+  pretrain_epochs: 1
+  finetune_epochs: 1
   seeds:
     - 42
-    - 1337
-    - 2025
   ablations:
     - full
-    - text_only
-    - text_metadata
-    - text_citation
 trainer:
   mixed_precision: fp16
   gradient_accumulation_steps: 1
@@ -91,6 +83,6 @@ trainer:
     min_per_class: 1
     ema_momentum: 0.9
     distributionalignment: true
-  use_mlflow: true
-  mlflow_experiment: MetaGraphSci_openalex_ai
+  use_mlflow: false   # avoid polluting the real experiment tracking server
+  mlflow_experiment: MetaGraphSci_openalex_ai_smoke
   use_wandb: false
