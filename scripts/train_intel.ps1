@@ -25,14 +25,5 @@ $env:PYTORCH_ENABLE_XPU_FALLBACK = "1"
 
 python -c "import torch; assert torch.xpu.is_available(), 'Intel XPU not detected. Reinstall drivers + run setup script.'; print('[xpu]', torch.xpu.get_device_name(0))"
 
-# Read run output dir from the YAML so the notifier knows where to look.
-$runDir = python -c "import yaml,sys; print(yaml.safe_load(open(r'$($env:CONFIG)'))['project']['output_dir'])"
-
 python -m src.pipeline --config $env:CONFIG
-$trainExit = $LASTEXITCODE
-
-# Best-effort email notification (no-op if GMAIL_USER / GMAIL_APP_PASSWORD unset).
-$status = if ($trainExit -eq 0) { "ok" } else { "fail" }
-python scripts\notify_email.py $status $runDir
-
-exit $trainExit
+exit $LASTEXITCODE

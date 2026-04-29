@@ -17,7 +17,7 @@ from .data import (
     load_citation_graph, load_documents, load_neighbor_cache,
     save_neighbor_cache, split_documents, split_graphs)
 from .model.metagraphsci import MetaGraphSci
-from train_eval import MetaGraphSciTrainerEval
+from .train_eval import MetaGraphSciTrainerEval
 from .include import (
     setup_global_logger, PRIMARY_METRICS, 
     aggregate_seed_results, plot_embedding_projection,

@@ -25,7 +25,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from constants import (
+from .constants import (
     DATALOADER_PREFETCH_FACTOR,
     YEAR, REFERENCE_YEAR,
     UNKNOWN_TOKEN, YEAR_SCALE,

@@ -13,6 +13,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from accelerate import Accelerator
 from loguru import logger
+from tqdm.auto import tqdm
 
 from .include import (
     NeighborhoodAwareContrastiveLoss, PseudoLabeler,
@@ -271,11 +272,16 @@ class MetaGraphSciTrainerEval:
     def pretrain(self, loader: DataLoader, optimizer: AdamW, epochs: int, log_interval: int = 20) -> dict[str, list[float]]:
         """Executes the self-supervised contrastive pretraining phase."""
         history = {"epoch": [], "train_loss": []}
+        show_bar = self.accelerator.is_local_main_process
+        epoch_bar = tqdm(range(1, epochs + 1), desc="Pretrain", unit="ep", disable=not show_bar)
 
-        for epoch in range(1, epochs + 1):
+        for epoch in epoch_bar:
             self.model.train()
             total_loss, total_steps = 0.0, 0.0
-            for step, batch in enumerate(loader, start=1):
+            step_bar = tqdm(
+                loader, total=len(loader), desc=f"Pretrain ep {epoch}/{epochs}",
+                unit="batch", leave=False, dynamic_ncols=True, disable=not show_bar)
+            for step, batch in enumerate(step_bar, start=1):
                 with self.accelerator.accumulate(self.model):
                     optimizer.zero_grad()
 
@@ -296,20 +302,28 @@ class MetaGraphSciTrainerEval:
                     self.clip()
                     optimizer.step()
 
-                total_loss += float(loss.detach().item())
+                loss_value = float(loss.detach().item())
+                total_loss += loss_value
                 total_steps += 1
+                step_bar.set_postfix(loss=f"{loss_value:.4f}")
 
-                if step % log_interval == 0 and self.accelerator.is_local_main_process:
-                    logger.info(f"[Pretrain] epoch={epoch} step={step}/{len(loader)} loss={loss.item():.4f}")
+                if step % log_interval == 0 and show_bar:
+                    tqdm.write(f"[Pretrain] epoch={epoch} step={step}/{len(loader)} loss={loss_value:.4f}")
 
+            step_bar.close()
             average_loss = total_loss / max(total_steps, 1)
             row = {"stage": "pretrain", "epoch": epoch, "train_loss": average_loss}
+
+            if show_bar:
+                logger.info(f"[Pretrain] epoch={epoch}/{epochs} avg_loss={average_loss:.4f}")
+            epoch_bar.set_postfix(avg_loss=f"{average_loss:.4f}")
 
             history["epoch"].append(epoch)
             history["train_loss"].append(average_loss)
             self.history.append(row)
             self.log_metrics({"train_loss": average_loss}, epoch, "pretrain")
 
+        epoch_bar.close()
         return history
 
     @torch.no_grad()
@@ -325,8 +339,12 @@ class MetaGraphSciTrainerEval:
         probs: list[Tensor] = []
         embeddings: list[Tensor] = []
         total_loss, total_steps = 0.0, 0.0
+        show_bar = self.accelerator.is_local_main_process
+        eval_bar = tqdm(
+            loader, total=len(loader), desc=f"Eval[{split}]",
+            unit="batch", leave=False, dynamic_ncols=True, disable=not show_bar)
 
-        for batch in loader:
+        for batch in eval_bar:
             z, logits, batch_probs = self.forward(batch)
             loss = self.supervised_loss(logits, batch["labels"])
             total_loss += float(loss.detach().item())
@@ -340,6 +358,9 @@ class MetaGraphSciTrainerEval:
             if return_embeddings or output_dir is not None:
                 embeddings.append(self.gather(z).detach().cpu())
 
+            eval_bar.set_postfix(loss=f"{total_loss / max(total_steps, 1):.4f}")
+
+        eval_bar.close()
         # Collapse distributed tensors into local numpy arrays for evaluation utilities
         y_true = torch.cat(labels).numpy()
         y_pred = torch.cat(preds).numpy()
@@ -378,14 +399,19 @@ class MetaGraphSciTrainerEval:
         # consistency loss, vastly improving generalization when labels are scarce.
         history: dict[str, list[float]] = {"epoch": [], "train_loss": [], "sup_loss": [], "ssl_loss": [], "pseudo_label_ratio": []}
         unlabeled_stream = cycle(unlabeled_loader)
+        show_bar = self.accelerator.is_local_main_process
+        epoch_bar = tqdm(range(1, epochs + 1), desc="Finetune", unit="ep", disable=not show_bar)
 
-        for epoch in range(1, epochs + 1):
+        for epoch in epoch_bar:
             self.model.train()
             total_loss, total_sup, total_ssl = 0.0, 0.0, 0.0
             total_selected, total_unlabeled = 0, 0
             threshold_track: list[float] = []
+            step_bar = tqdm(
+                labeled_loader, total=len(labeled_loader), desc=f"Finetune ep {epoch}/{epochs}",
+                unit="batch", leave=False, dynamic_ncols=True, disable=not show_bar)
 
-            for step, labeled_batch in enumerate(labeled_loader, start=1):
+            for step, labeled_batch in enumerate(step_bar, start=1):
                 unlabeled_batch = next(unlabeled_stream)
                 with self.accelerator.accumulate(self.model):
                     optimizer.zero_grad()
@@ -409,17 +435,24 @@ class MetaGraphSciTrainerEval:
                     optimizer.step()
 
                 # Accumulate batch statistics
-                total_loss += float(loss.detach().item())
-                total_sup += float(sup_loss.detach().item())
-                total_ssl += float(ssl_loss.detach().item())
+                loss_value = float(loss.detach().item())
+                sup_value = float(sup_loss.detach().item())
+                ssl_value = float(ssl_loss.detach().item())
+                total_loss += loss_value
+                total_sup += sup_value
+                total_ssl += ssl_value
                 total_selected += int(selected.sum().item())
                 total_unlabeled += int(unlabeled_probs.size(0))
                 threshold_track.append(float(thresholds.mean().item()))
+                step_bar.set_postfix(
+                    total=f"{loss_value:.4f}", sup=f"{sup_value:.4f}", ssl=f"{ssl_value:.4f}")
 
-                if step % log_interval == 0 and self.accelerator.is_local_main_process:
-                    logger.info(
+                if step % log_interval == 0 and show_bar:
+                    tqdm.write(
                         f"[Finetune] epoch={epoch} step={step}/{len(labeled_loader)} "
-                        f"total={loss.item():.4f} sup={sup_loss.item():.4f} ssl={ssl_loss.item():.4f}")
+                        f"total={loss_value:.4f} sup={sup_value:.4f} ssl={ssl_value:.4f}")
+
+            step_bar.close()
 
             row: dict[str, float | int | str] = {
                 "stage": "finetune", "epoch": epoch,
@@ -450,6 +483,23 @@ class MetaGraphSciTrainerEval:
             self.history.append(row)
             self.log_metrics({k: v for k, v in row.items() if isinstance(v, (float, int))}, epoch, "finetune")
 
+            if show_bar:
+                val_score = row.get(f"val_{self.cfg['selection_metric']}")
+                summary = (
+                    f"[Finetune] epoch={epoch}/{epochs} train_loss={row['train_loss']:.4f} "
+                    f"sup={row['sup_loss']:.4f} ssl={row['ssl_loss']:.4f} "
+                    f"pseudo_ratio={row['pseudo_label_ratio']:.3f}"
+                )
+                if isinstance(val_score, (int, float)):
+                    summary += f" val_{self.cfg['selection_metric']}={float(val_score):.4f}"
+                logger.info(summary)
+            postfix = {"loss": f"{row['train_loss']:.4f}"}
+            val_score = row.get(f"val_{self.cfg['selection_metric']}")
+            if isinstance(val_score, (int, float)):
+                postfix[f"val_{self.cfg['selection_metric']}"] = f"{float(val_score):.4f}"
+            epoch_bar.set_postfix(**postfix)
+
+        epoch_bar.close()
         # Export visualizations and history trails to filesystem
         save_frame(to_frame(self.history), self.output_dir / "artifacts" / "history.csv")
         plot_training_history(self.history, self.output_dir / "artifacts" / "training_curves.png")

@@ -18,7 +18,7 @@ import torch
 from torch_geometric.data import Data
 from torch_geometric.utils import get_laplacian, subgraph as pyg_subgraph
 
-from constants import EdgeType, GraphData, MAX_NODES_FOR_SPECTRAL
+from .constants import EdgeType, GraphData, MAX_NODES_FOR_SPECTRAL
 
 
 def graph_node_ids(graph: GraphData) -> list[int]:

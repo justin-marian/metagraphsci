@@ -1,0 +1,96 @@
+project:
+  benchmark: openalex_ai
+  run_name: MetaGraphSci_openalex_ai_rtx6000_ada_fast
+  output_dir: runs/openalex_ai_rtx6000_ada_fast
+  cache_dir: cache/openalex_ai
+data:
+  documents: data/openalex_ai/documents.parquet
+  citations: data/openalex_ai/citations.parquet
+  baselines: data/openalex_ai/baselines.parquet
+  label_column: label
+  source_col: source
+  target_col: target
+  split_strategy: time
+  graph_mode: transductive
+  label_ratio: 0.1
+  test_size: 0.2
+  val_size: 0.1
+  # Cut from 18 to 8: fewer context docs per sample = ~2x fewer SciBERT forwards.
+  max_context_size: 8
+  sampling_strategy: local_relevance
+  connectivity_weight: 0.35
+  temporal_weight: 0.35
+  reciprocity_weight: 0.15
+  overlap_weight: 0.15
+  k_hops: 2
+  spectral_dim: 0
+  enable_spectral: false
+  # Cut from 512 to 256: most OpenAlex abstracts fit in 256 tokens (median ~150-200).
+  # Encoder cost scales ~quadratically; this gives ~1.7x speedup on the SciBERT path.
+  max_seq_length: 256
+  max_authors: null
+  cache_text: true
+  pretokenize_context: true
+model:
+  tokenizer_name: allenai/scibert_scivocab_uncased
+  text_dim: 768
+  metadata_dim: 256
+  citation_dim: 256
+  fusion_dim: 512
+  classifier_scale: 10.0
+  metadata_embedding_dim: 64
+  metadata_cross_layers: 3
+  peft_mode: lora
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.1
+  # Disabled: with seq 256 + context 8 + batch 48 we use ~5-8 GB, well under Ada's 48 GB.
+  # Skipping recomputation saves ~30-40% per step.
+  gradient_checkpointing: false
+  freeze_backbone_until_layer: 6
+  citation_heads: 4
+  citation_layers: 2
+  citation_ff_dim: 512
+  selector_hidden_dim: 256
+  selector_top_k: 8
+  citation_dropout: 0.1
+  fusion_modality_dropout: 0.1
+  use_latent_graph: true
+  latent_graph_top_k: 4
+  hybrid_alpha_init: -2.0
+train:
+  # 2h budget on RTX 6000 Ada (48 GB).
+  # Memory drops ~4x vs the full Ada config (seq 512->256, context 18->8),
+  # so batch_size goes 24 -> 48 with checkpointing off and grad_accum 1.
+  # If you OOM on the first step, drop batch_size to 32 and set grad_accum to 2.
+  batch_size: 48
+  num_workers: 4
+  pretrain_epochs: 1
+  finetune_epochs: 2
+  seeds:
+    - 42
+  ablations:
+    - full
+    - text_only
+trainer:
+  mixed_precision: fp16
+  gradient_accumulation_steps: 1
+  pretrain_lr: 2.0e-05
+  finetune_lr: 1.0e-05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  selection_metric: macro_f1
+  lambda_ssl: 1.0
+  contrastive_temperature: 0.07
+  metadata_negative_weight: 0.25
+  ssl_text_dropout: 0.15
+  pseudo_label:
+    beta: 0.9
+    temperature: 1.0
+    warmup_epochs: 1
+    min_per_class: 1
+    ema_momentum: 0.9
+    distributionalignment: true
+  use_mlflow: false
+  mlflow_experiment: MetaGraphSci_openalex_ai
+  use_wandb: false

@@ -17,7 +17,7 @@ import numpy as np
 import polars as pl
 from sklearn.model_selection import train_test_split
 
-from constants import YEAR, REQUIRED_COLUMNS, UNKNOWN_TOKEN
+from .constants import YEAR, REQUIRED_COLUMNS, UNKNOWN_TOKEN
 
 
 def parse_authors(value: Any) -> list[str]:

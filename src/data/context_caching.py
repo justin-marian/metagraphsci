@@ -20,7 +20,7 @@ import numpy as np
 import polars as pl
 from torch_geometric.utils import degree
 
-from constants import (
+from .constants import (
     CONNECTIVITY_WEIGHT,
     OVERLAP_WEIGHT,
     RECIPROCITY_WEIGHT,
@@ -31,11 +31,11 @@ from constants import (
     MAX_GRAPH_NODES_FOR_HOPS,
     TEMPORAL_DECAY_YEARS,
     EdgeType, GraphData, NeighborCache)
-from graph_utils import (
+from .graph_utils import (
     build_local_context_map, edge_type,
     k_hop_profile, overlap_score,
     reciprocity_value, spectral_features)
-from tabular_utils import build_year_lookup
+from .tabular_utils import build_year_lookup
 
 
 def missing_year(value: Any) -> bool:

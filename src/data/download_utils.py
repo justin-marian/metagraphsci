@@ -17,7 +17,7 @@ from typing import Any
 import polars as pl
 import yaml
 
-from constants import BENCHMARK_DEFAULTS_DATASETS, BENCHMARK_RUN_PREFIX, DOCUMENT_COLUMNS, REQUIRED_COLUMNS
+from .constants import BENCHMARK_DEFAULTS_DATASETS, BENCHMARK_RUN_PREFIX, DOCUMENT_COLUMNS, REQUIRED_COLUMNS
 
 
 def save_frame(df: pl.DataFrame, path: Path) -> None:
