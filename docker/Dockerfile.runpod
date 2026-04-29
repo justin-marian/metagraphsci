@@ -1,0 +1,32 @@
+# RunPod-ready image for MetaGraphSci NVIDIA training.
+# Base: official PyTorch image with CUDA 12.4 + cuDNN. Compatible with
+# RunPod templates "PyTorch 2.x" / any A100/H100/RTX pod.
+FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/workspace/.cache/huggingface \
+    TRANSFORMERS_CACHE=/workspace/.cache/huggingface \
+    TORCH_HOME=/workspace/.cache/torch \
+    MLFLOW_TRACKING_URI=/workspace/mlruns
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl ca-certificates build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace/metagraphsci
+
+COPY requirements.txt ./requirements.txt
+# Install non-torch deps (torch already in base image).
+RUN sed -i '/^torch$/d;/^torchvision$/d' requirements.txt && \
+    pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+COPY . .
+RUN pip install -e .
+
+# Default entrypoint runs the NVIDIA training. Override CMD on `docker run`
+# or in the RunPod template's "Container Start Command" if needed.
+CMD ["bash", "scripts/train_nvidia.sh"]

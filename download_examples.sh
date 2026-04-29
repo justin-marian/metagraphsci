@@ -15,4 +15,10 @@
 python src/data/download.py --dataset openalex --out_dir data/openalex_huge \
   --oa_filter "has_doi:true" --oa_max_works 1000000 --oa_label_field field \
   --oa_workers 4 --oa_year_min 1990 --oa_year_max 2025 \
-  --oa_email daachirita@gmail.com
+  --oa_email example@gmail.com
+
+# Broad (replaces / mirrors ogbn-arxiv)
+./download_openalex.sh general "has_doi:true" 200000 field 4
+
+# Narrow AI (replaces / mirrors FoRC4CL)
+./download_openalex.sh ai "primary_topic.subfield.id:1702" 30000 topic

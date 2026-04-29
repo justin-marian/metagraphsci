@@ -1,0 +1,92 @@
+project:
+  benchmark: openalex_ai
+  run_name: MetaGraphSci_openalex_ai_intel
+  output_dir: runs/openalex_ai_intel
+  cache_dir: cache/openalex_ai
+data:
+  documents: data/openalex_ai/documents.parquet
+  citations: data/openalex_ai/citations.parquet
+  baselines: data/openalex_ai/baselines.parquet
+  label_column: label
+  source_col: source
+  target_col: target
+  split_strategy: time
+  graph_mode: transductive
+  label_ratio: 0.1
+  test_size: 0.2
+  val_size: 0.1
+  # Smaller context to fit Intel Arc / Iris Xe VRAM (8-16GB typical).
+  max_context_size: 12
+  sampling_strategy: local_relevance
+  connectivity_weight: 0.35
+  temporal_weight: 0.35
+  reciprocity_weight: 0.15
+  overlap_weight: 0.15
+  k_hops: 2
+  spectral_dim: 0
+  enable_spectral: false
+  # Trim sequence length to halve attention memory cost on consumer Intel GPUs.
+  max_seq_length: 256
+  max_authors: null
+  cache_text: true
+  pretokenize_context: true
+model:
+  tokenizer_name: allenai/scibert_scivocab_uncased
+  text_dim: 768
+  metadata_dim: 256
+  citation_dim: 256
+  fusion_dim: 512
+  classifier_scale: 10.0
+  metadata_embedding_dim: 64
+  metadata_cross_layers: 3
+  peft_mode: lora
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.1
+  gradient_checkpointing: true
+  freeze_backbone_until_layer: 6
+  citation_heads: 4
+  citation_layers: 2
+  citation_ff_dim: 512
+  selector_hidden_dim: 256
+  selector_top_k: 8
+  citation_dropout: 0.1
+  fusion_modality_dropout: 0.1
+  use_latent_graph: true
+  latent_graph_top_k: 4
+  hybrid_alpha_init: -2.0
+train:
+  # Intel Arc A770 16GB: batch_size 4-8, grad_accum 4
+  # Intel Arc A750/A580 8GB or Iris Xe: batch_size 2, grad_accum 8
+  batch_size: 4
+  # Windows + PyTorch DataLoader: keep workers low to avoid spawn overhead.
+  num_workers: 0
+  pretrain_epochs: 2
+  finetune_epochs: 3
+  seeds:
+    - 42
+  ablations:
+    - full
+trainer:
+  # Intel Arc / Battlemage have native bf16 ALUs; prefer bf16 over fp16 (more stable).
+  mixed_precision: bf16
+  gradient_accumulation_steps: 4
+  pretrain_lr: 2.0e-05
+  finetune_lr: 1.0e-05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  selection_metric: macro_f1
+  lambda_ssl: 1.0
+  contrastive_temperature: 0.07
+  metadata_negative_weight: 0.25
+  ssl_text_dropout: 0.15
+  pseudo_label:
+    beta: 0.9
+    temperature: 1.0
+    warmup_epochs: 1
+    min_per_class: 1
+    ema_momentum: 0.9
+    distributionalignment: true
+  use_mlflow: false
+  mlflow_experiment: MetaGraphSci_openalex_ai
+  use_wandb: false
