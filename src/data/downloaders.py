@@ -1,3 +1,12 @@
+"""
+Avoids importing the heavier OpenAlex implementation at module load time.
+This file only provides the stable public entry point so external callers have a consistent
+import path regardless of internal refactoring.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
 import json
 import shutil
 import socket
@@ -7,40 +16,47 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from pathlib import Path
+from typing import Final
 import polars as pl
-from torch_geometric.datasets import Planetoid
 from ogb.nodeproppred import NodePropPredDataset
+from torch_geometric.datasets import Planetoid
 
-from constants import FORC2025_URL
+
 from download_utils import (
     save_dataset_bundle, save_benchmark_config,
-    mask_to_split, find_candidates,
+    find_candidates, mask_to_split,
     download_file, extract_zip,
     read_table, ensure_required_columns,
     save_frame, empty_citations)
 
 
-def download_planetoid_dataset(name: str, out_dir: str, config_template: str | Path) -> None:
-    """Download a Planetoid benchmark and convert it to the shared schema."""
-    
-    # Graph Deconstruction & Homogenization
-    # PyTorch Geometric provides Planetoid as a ready-to-use object. However, 
-    # feeding this directly into the pipeline couples the model to PyG's specific format. 
-    # Instead, intentionally deconstruct the PyG object into our universal tabular 
-    # schema (documents + citations). This guarantees the training pipeline only needs 
-    # one ingest logic, whether the data came from PyG, OGB, or a raw CSV download.
-    dataset = Planetoid(root=str(Path(out_dir) / "raw"), name=name)
-    data = dataset[0]
-    
-    docs = pl.DataFrame({
-        "doc_id": list(range(data.num_nodes)), "title": [""] * data.num_nodes, 
-        "abstract": [""] * data.num_nodes, "label": data.y.cpu().numpy().tolist(),
-        "venue": [name] * data.num_nodes, "publisher": ["Planetoid"] * data.num_nodes,
-        "authors": [""] * data.num_nodes, "year": [None] * data.num_nodes,
-        "original_split": mask_to_split(data.train_mask.cpu(), data.val_mask.cpu(), data.test_mask.cpu())
-    })
-
+def download_openalex_query(
+    out_dir:           str,
+    config_template:   str | Path,
+    query:             str | None = None,
+    max_papers:        int = 5_000,
+    from_year:         int | None = None,
+    to_year:           int | None = None,
+    include_citations: bool = True,
+    expand_citations:  bool = True,
+    use_llm_fallback:  bool = False,
+    llm_api_key:       str | None = None,
+    papers_per_class:  int | None = None,
+    classes:           list[str] | None = None,
+    domain:            str = "cs_ai") -> None:
+    """
+    Delegate OpenAlex dataset construction to the paper_labeler implementation.
+    The local import keeps optional dependencies (polars, requests, etc.) and
+    their startup cost out of code paths that only need the stable public interface.
+    """
+    from paper_labeler import download_openalex_query as impl
+    impl(
+        out_dir=out_dir, config_template=config_template,
+        query=query, max_papers=max_papers,
+        from_year=from_year, to_year=to_year,
+        include_citations=include_citations, expand_citations=expand_citations,
+        use_llm_fallback=use_llm_fallback, llm_api_key=llm_api_key,
+        papers_per_class=papers_per_class, classes=classes, domain=domain)
     edge_index = data.edge_index.cpu().numpy()
     citations = pl.DataFrame({"source": edge_index[0].tolist(), "target": edge_index[1].tolist()})
     save_dataset_bundle("cora" if name.lower() == "cora" else "pubmed", out_dir, docs, config_template, citations)
@@ -384,7 +400,7 @@ def _finalize_openalex(
 
     save_frame(documents, out / "documents.parquet")
     save_frame(citations, out / "citations.parquet")
-    save_benchmark_config("openalex", out, config_template, file_ext="parquet")
+    save_benchmark_config("openalex", out, config_template)
 
     # Cleanup only AFTER final outputs are safely written - if the concat above crashed,
     # the part files and progress json are still on disk for the next resume attempt.
@@ -567,3 +583,28 @@ def download_openalex(
 
     n_docs, n_cits = _finalize_openalex(out, parts_dir, config_template)
     print(f"[openalex] wrote {n_docs} documents and {n_cits} citations to {out}")
+
+
+def download_planetoid_dataset(name: str, out_dir: str, config_template: str | Path) -> None:
+    """Download a Planetoid benchmark and convert it to the shared schema."""
+    
+    # Graph Deconstruction & Homogenization
+    # PyTorch Geometric provides Planetoid as a ready-to-use object. However, 
+    # feeding this directly into the pipeline couples the model to PyG's specific format. 
+    # Instead, intentionally deconstruct the PyG object into our universal tabular 
+    # schema (documents + citations). This guarantees the training pipeline only needs 
+    # one ingest logic, whether the data came from PyG, OGB, or a raw CSV download.
+    dataset = Planetoid(root=str(Path(out_dir) / "raw"), name=name)
+    data = dataset[0]
+    
+    docs = pl.DataFrame({
+        "doc_id": list(range(data.num_nodes)), "title": [""] * data.num_nodes, 
+        "abstract": [""] * data.num_nodes, "label": data.y.cpu().numpy().tolist(),
+        "venue": [name] * data.num_nodes, "publisher": ["Planetoid"] * data.num_nodes,
+        "authors": [""] * data.num_nodes, "year": [None] * data.num_nodes,
+        "original_split": mask_to_split(data.train_mask.cpu(), data.val_mask.cpu(), data.test_mask.cpu())
+    })
+
+    edge_index = data.edge_index.cpu().numpy()
+    citations = pl.DataFrame({"source": edge_index[0].tolist(), "target": edge_index[1].tolist()})
+    save_dataset_bundle("cora" if name.lower() == "cora" else "pubmed", out_dir, docs, config_template, citations)

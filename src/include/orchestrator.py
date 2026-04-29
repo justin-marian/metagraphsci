@@ -29,7 +29,7 @@ def evaluate_predictions(
     return {
         "metrics": multiclass_metrics(y_true_arr, y_pred_arr, y_prob_arr),
         "per_class": per_class_metrics(y_true_arr, y_pred_arr, label_names),
-        "predictions": prediction_table(doc_id_arr, y_true_arr, y_pred_arr, y_prob_arr),
+        "predictions": prediction_table(doc_id_arr, y_true_arr, y_pred_arr, y_prob_arr)
     }
 
 

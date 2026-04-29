@@ -8,6 +8,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+./data/
 out/
 downloads/
 eggs/
@@ -101,6 +102,12 @@ CLAUDE.md.local
 .DS_Store
 Thumbs.db
 desktop.ini
+<<<<<<< HEAD
 
 # Project docs (kept locally only)
 docs/
+=======
+.cache/
+data/
+dump_test.py
+>>>>>>> 53a3a92bc983bbb7723dd9c1896c2a18ebcd70e2

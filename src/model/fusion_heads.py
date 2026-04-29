@@ -29,7 +29,7 @@ class MultimodalFusion(nn.Module):
 
     def maybe_drop(self, x: Tensor) -> Tensor:
         """Drops entire modality vectors for random items in the batch."""
-        # Generates a single boolean per batch item `(x.size(0), 1)`, zeroing out the 
+        # Generates a single boolean per batch item, zeroing out the 
         # entire modality embedding for that item, perfectly simulating missing data.
         if self.training and self.modality_dropout > 0.0:
             keep = torch.bernoulli(torch.full((x.size(0), 1), 1.0 - self.modality_dropout, device=x.device))

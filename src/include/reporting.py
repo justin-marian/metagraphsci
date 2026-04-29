@@ -85,9 +85,7 @@ def save_benchmark_table(
     methods = summary[method_col].unique().to_list()
 
     # Construct LaTeX headers
-    group_headers = " & " + " & ".join([
-        f"\\multicolumn{{{len(metrics)}}}{{c}}{{{dataset}}}" for dataset in datasets
-    ]) + r" \\"
+    group_headers = " & " + " & ".join([f"\\multicolumn{{{len(metrics)}}}{{c}}{{{dataset}}}" for dataset in datasets]) + r" \\"
     metrics_fmted = " & ".join(m.replace("_", "-").title() for _ in datasets for m in metrics)
     sub_headers = method_col.title() + " & " + metrics_fmted + r" \\"
     column_spec = "l" + "c" * (len(datasets) * len(metrics))
@@ -105,9 +103,7 @@ def save_benchmark_table(
             values = subset.to_dicts()[0] if subset.height else {}
             
             for metric in metrics:
-                cell = rank_maps[(dataset, metric)].get(
-                    str(method), format_score(values.get(f"{metric}_mean"), values.get(f"{metric}_std"))
-                )
+                cell = rank_maps[(dataset, metric)].get(str(method), format_score(values.get(f"{metric}_mean"), values.get(f"{metric}_std")))
                 row.append(cell)
         body_lines.append(" & ".join(row) + r" \\")
 
