@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from transformers import AutoAdapterModel, BitsAndBytesConfig
+from adapters import AutoAdapterModel
+from transformers import BitsAndBytesConfig
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 
 

@@ -67,7 +67,7 @@ def infer_max_authors(docs: pd.DataFrame, fallback: int = 8, cap: int = 32) -> i
     """Calculates a robust upper bound for author sequence lengths."""
     if "authors" not in docs.columns: 
         return fallback
-    counts = [len(v) if isinstance(v, list) else 0 for v in docs["authors"].tolist()]
+    counts = [len(v) if isinstance(v, list) else 0 for v in docs["authors"].to_list()]
     return max(1, min(int(np.percentile(counts, 95)), cap)) if counts else fallback
 
 
@@ -117,11 +117,11 @@ def build_run_bundle(cfg: dict[str, Any], seed: int) -> dict[str, Any]:
     data_cfg, project_cfg = cfg["data"], cfg["project"]
 
     docs, label_names = load_documents(data_cfg["documents"], label_column=data_cfg["label_column"])
-    graph = load_citation_graph(data_cfg["citations"], source_col=data_cfg["source_col"], target_col=data_cfg["target_col"], node_ids=docs["doc_id"].tolist())
+    graph = load_citation_graph(data_cfg["citations"], source_col=data_cfg["source_col"], target_col=data_cfg["target_col"], node_ids=docs["doc_id"].to_list())
 
     train_docs, val_docs, test_docs = split_documents(docs, test_size=data_cfg["test_size"], val_size=data_cfg["val_size"], seed=seed, strategy=data_cfg["split_strategy"])
     labeled_docs, unlabeled_docs = create_low_label_split(train_docs, label_ratio=data_cfg["label_ratio"], seed=seed)
-    graphs = split_graphs(graph, train_docs["doc_id"].tolist(), val_docs["doc_id"].tolist(), test_docs["doc_id"].tolist(), mode=data_cfg["graph_mode"])
+    graphs = split_graphs(graph, train_docs["doc_id"].to_list(), val_docs["doc_id"].to_list(), test_docs["doc_id"].to_list(), mode=data_cfg["graph_mode"])
 
     tokenizer = create_tokenizer(cfg["model"]["tokenizer_name"])
     encoders = {key: value for key, value in zip(["venue", "publisher", "author"], create_encoders(train_docs))}
@@ -150,9 +150,9 @@ def build_run_bundle(cfg: dict[str, Any], seed: int) -> dict[str, Any]:
         save_neighbor_cache(cache, cache_path, expected_meta)
         return cache
 
-    train_cache = build_or_load_cache(graphs["pretrain"], train_docs["doc_id"].tolist(), "train", valid_ids=train_docs["doc_id"].tolist())
-    val_cache = build_or_load_cache(graphs["val"], val_docs["doc_id"].tolist(), "val", valid_ids=val_docs["doc_id"].tolist())
-    test_cache = build_or_load_cache(graphs["test"], test_docs["doc_id"].tolist(), "test", valid_ids=test_docs["doc_id"].tolist())
+    train_cache = build_or_load_cache(graphs["pretrain"], train_docs["doc_id"].to_list(), "train", valid_ids=train_docs["doc_id"].to_list())
+    val_cache = build_or_load_cache(graphs["val"], val_docs["doc_id"].to_list(), "val", valid_ids=val_docs["doc_id"].to_list())
+    test_cache = build_or_load_cache(graphs["test"], test_docs["doc_id"].to_list(), "test", valid_ids=test_docs["doc_id"].to_list())
 
     common_context = docs if data_cfg["graph_mode"] == "transductive" else train_docs
     datasets = {
@@ -304,4 +304,4 @@ if __name__ == "__main__":
         setup_global_logger("..")
         main()
     except Exception as e:
-        logger.info(f"Experiment failed with error: {e}")
+        logger.exception(f"Experiment failed with error: {e}")

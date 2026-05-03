@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from downloaders import (
+from .downloaders import (
     download_forc2025, download_ogbn_arxiv,
     download_openalex,  download_planetoid_dataset)
 

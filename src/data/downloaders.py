@@ -22,7 +22,7 @@ from ogb.nodeproppred import NodePropPredDataset
 from torch_geometric.datasets import Planetoid
 
 
-from download_utils import (
+from .download_utils import (
     save_dataset_bundle, save_benchmark_config,
     find_candidates, mask_to_split,
     download_file, extract_zip,

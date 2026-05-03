@@ -140,7 +140,7 @@ def local_relevance_func(
     graph: GraphData, node_ids: Iterable[int], documents: pl.DataFrame,
     # Tune these to shift the relative importance of different signals in the final cache ranking.
     connectivity_weight: float, temporal_weight: float, reciprocity_weight: float, overlap_weight: float,
-    hub_degree_THR: int = HUB_DEGREE_THR) -> dict[int, dict[int, float]]:
+    hub_degree_threshold: int = HUB_DEGREE_THR) -> dict[int, dict[int, float]]:
     """
     Score candidate citations with a compact structural–temporal relevance model.
     The score for each (center, neighbor) pair is a weighted sum of four terms:
@@ -166,7 +166,7 @@ def local_relevance_func(
 
     for node_id in map(int, node_ids):
         # Skip hub nodes entirely when the threshold is active.
-        if hub_degree_THR > 0 and in_map[node_id] > hub_degree_THR:
+        if hub_degree_threshold > 0 and in_map[node_id] > hub_degree_threshold:
             continue
 
         candidates = local_contexts[node_id]
@@ -178,7 +178,7 @@ def local_relevance_func(
 
         for neighbor_id in candidates:
             # Skip hub neighbours for the same reason as hub center nodes.
-            if hub_degree_THR > 0 and in_map[neighbor_id] > hub_degree_THR:
+            if hub_degree_threshold > 0 and in_map[neighbor_id] > hub_degree_threshold:
                 continue
 
             # Connectivity is the sum of in- and out-degree normalised by the
@@ -186,7 +186,7 @@ def local_relevance_func(
             connectivity = in_map[neighbor_id] + out_map[neighbor_id] / max_degree
             scores[neighbor_id] = (
                 connectivity_weight  * connectivity
-                + temporal_weight    * time_similarity(node_year, year_lookup[neighbor_id])
+                + temporal_weight    * time_similarity(node_year, year_lookup.get(neighbor_id, node_year))
                 + reciprocity_weight * reciprocity_value(edge_type(graph, node_id, neighbor_id))
                 + overlap_weight     * overlap_score(local_contexts, node_id, neighbor_id))
 
@@ -209,7 +209,7 @@ def build_relevance_scores(
     # Structural feature options (ignored when k hops are 0 or spectral dim is 0 or not enabled). 
     # These do not affect the relevance scores themselves but are included here to avoid redundant 
     # graph traversals when both scores and features are needed for cache entries.
-    hub_degree_THR: int
+    hub_degree_threshold: int
 ) -> dict[int, dict[int, float]]:
     """Dispatch to the configured neighbour-scoring strategy.
 
@@ -230,7 +230,7 @@ def build_relevance_scores(
             reciprocity_weight=reciprocity_weight,
             overlap_weight=overlap_weight,
             # Structural feature options (ignored when k hops are 0 or spectral dim is 0 or not enabled).
-            hub_degree_THR=hub_degree_THR)
+            hub_degree_threshold=hub_degree_threshold)
 
     if strategy == "top_k":
         return top_k_scores(graph, node_ids)
@@ -278,7 +278,7 @@ def build_neighbor_cache(
     enable_spectral: bool = False,
     k_hops: int = K_HOPS,
     spectral_dim: int = SPECTRAL_DIM,
-    hub_degree_THR: int = HUB_DEGREE_THR,
+    hub_degree_threshold: int = HUB_DEGREE_THR,
     # Safety cap for BFS traversal
     max_graph_nodes_for_hops: int = MAX_GRAPH_NODES_FOR_HOPS
 ) -> NeighborCache:
@@ -310,7 +310,7 @@ def build_neighbor_cache(
     k_hops                      : BFS depth for hop-profile feature (0 = disabled, no BFS, no hop features).
     spectral_dim                : Laplacian eigenvector dimension (0 = disabled, no spectral features).
     enable_spectral             : Must be True AND spectral_dim > 0 to compute and include spectral features.
-    hub_degree_THR        : Exclude nodes with in-degree > this (0 = off, no hub filtering).
+    hub_degree_threshold        : Exclude nodes with in-degree > this (0 = off, no hub filtering).
     """
     node_list = [int(node_id) for node_id in node_ids]
     # Restrict valid neighbours to the provided set; default to all center nodes.
@@ -324,7 +324,7 @@ def build_neighbor_cache(
         reciprocity_weight=reciprocity_weight,
         overlap_weight=overlap_weight,
         # Structural feature options (ignored when k hops are 0 or spectral dim is 0 or not enabled).
-        hub_degree_THR=hub_degree_THR)
+        hub_degree_threshold=hub_degree_threshold)
 
     year_lookup     = build_year_lookup(documents)
     spectral_lookup = spectral_features(graph, node_list, spectral_dim=spectral_dim, enabled=enable_spectral)
@@ -340,7 +340,7 @@ def build_neighbor_cache(
         # Filter to valid neighbours; exclude the center node from its own list.
         scored = {
             neighbor_id: score
-            for neighbor_id, score in relevance_scores[node_id].items()
+            for neighbor_id, score in relevance_scores.get(node_id, {}).items()
             if neighbor_id in valid_ids and neighbor_id != node_id
         }
 

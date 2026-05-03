@@ -1,11 +1,11 @@
 import torch.nn as nn
 from torch import Tensor
 
-from ablation import ABLATION_MODES, NUM_RELATIONS, TensorTriplet
-from fusion_heads import MultimodalFusion, NormalizedCosineClassifier
-from graph_encoder import CitationGraphTransformer
-from metadata_encoder import MetadataEncoder
-from text_encoder import TextEncoder
+from .ablation import ABLATION_MODES, NUM_RELATIONS, TensorTriplet
+from .fusion_heads import MultimodalFusion, NormalizedCosineClassifier
+from .graph_encoder import CitationGraphTransformer
+from .metadata_encoder import MetadataEncoder
+from .text_encoder import TextEncoder
 
 
 """MetaGraphSci Architecture.

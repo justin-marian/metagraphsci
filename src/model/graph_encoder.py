@@ -43,7 +43,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ablation import NUM_RELATIONS
+from .ablation import NUM_RELATIONS
 
 
 class SignEquivariantPE(nn.Module):

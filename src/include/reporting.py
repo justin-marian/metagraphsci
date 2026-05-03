@@ -3,7 +3,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import polars as pl
 
-from utils import PRIMARY_METRICS, to_frame
+from .utils import PRIMARY_METRICS, to_frame
 
 
 def aggregate_seed_results(
