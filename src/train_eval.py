@@ -299,6 +299,12 @@ class MetaGraphSciTrainerEval:
                         anchor, positive, batch["doc_id"], self.neighborhoods(batch["doc_id"]),
                         metadata_affinity=metadata_affinity, positive_mask=positive_mask)
 
+                    if step <= 3:
+                        import torch as _t
+                        print(f"[DBG step={step}] anchor nan={_t.isnan(anchor).any().item()} max={anchor.abs().max().item():.3e} | "
+                              f"positive nan={_t.isnan(positive).any().item()} max={positive.abs().max().item():.3e} | "
+                              f"loss={loss.item():.4f}", flush=True)
+
                     self.accelerator.backward(loss)
                     self.clip()
                     optimizer.step()

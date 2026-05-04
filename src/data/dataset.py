@@ -265,8 +265,8 @@ class MultiScaleDocumentDataset(Dataset):
         author_ids.extend([0] * max(0, self.max_authors - len(author_ids)))
 
         return {
-            "venue_ids":     torch.tensor(self.venue_encoder[str(row.get("venue", UNKNOWN_TOKEN))], dtype=torch.long),
-            "publisher_ids": torch.tensor(self.publisher_encoder[(str(row.get("publisher", UNKNOWN_TOKEN)))], dtype=torch.long),
+            "venue_ids":     torch.tensor(self.venue_encoder.get(str(row.get("venue", UNKNOWN_TOKEN)), 0), dtype=torch.long),
+            "publisher_ids": torch.tensor(self.publisher_encoder.get((str(row.get("publisher", UNKNOWN_TOKEN))), 0), dtype=torch.long),
             "author_ids":    torch.tensor(author_ids[:self.max_authors], dtype=torch.long),
             "years":         torch.tensor([self.normalize_year(self.parse_year(row.get("year")))], dtype=torch.float32)
         }
@@ -294,8 +294,8 @@ class MultiScaleDocumentDataset(Dataset):
         result: dict[str, Any] = {
             "text":         self.tokenized_text(neighbor_id, str(neighbor_row["title"]), str(neighbor_row["abstract"])),
             "edge_type":    int(entry.get("edge_type", int(EdgeType.NONE))),
-            "venue_id":     self.venue_encoder[str(neighbor_row.get("venue", UNKNOWN_TOKEN))],
-            "publisher_id": self.publisher_encoder[str(neighbor_row.get("publisher", UNKNOWN_TOKEN))],
+            "venue_id":     self.venue_encoder.get(str(neighbor_row.get("venue", UNKNOWN_TOKEN)), 0),
+            "publisher_id": self.publisher_encoder.get(str(neighbor_row.get("publisher", UNKNOWN_TOKEN)), 0),
             "year":         self.normalize_year(neighbor_year),
             "year_delta":   (neighbor_year - center_year) / YEAR_SCALE,
             "score":        float(entry["score"])

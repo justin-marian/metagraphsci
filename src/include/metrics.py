@@ -34,7 +34,9 @@ def multiclass_metrics(
     # Some indicators require confidence distributions rather than final labels.
     # These are optional because not every baseline exposes calibrated scores.
     if y_prob is not None:
-        metrics["log_loss"] = float(log_loss(y_true, y_prob, labels=np.arange(y_prob.shape[1])))
+        y_prob_safe = np.where(np.isfinite(y_prob), y_prob, 1.0 / y_prob.shape[1])
+        y_prob_safe = y_prob_safe / np.maximum(y_prob_safe.sum(axis=1, keepdims=True), 1e-12)
+        metrics["log_loss"] = float(log_loss(y_true, y_prob_safe, labels=np.arange(y_prob.shape[1])))
         try:
             metrics["macro_ovr_auroc"] = float(roc_auc_score(y_true, y_prob, multi_class="ovr", average="macro"))
         except Exception:
