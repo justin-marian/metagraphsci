@@ -111,7 +111,7 @@ class MetaGraphSci(nn.Module):
         h_citation = self.citation_encoder(
             h_text, h_meta, candidate_embeddings, context_mask,
             context_edge_types, context_year_deltas, context_scores,
-            context_hop_profiles, context_spectral, context_meta, context_years)
+            context_hop_profiles, context_spectral, context_meta)
 
         return self.ablation_study(h_text, h_meta, h_citation, ablation_mode or self.default_ablation_mode)
 

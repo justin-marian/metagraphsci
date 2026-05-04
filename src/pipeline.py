@@ -139,7 +139,7 @@ def build_run_bundle(cfg: dict[str, Any], seed: int) -> dict[str, Any]:
                 return cache
 
         cache = build_neighbor_cache(
-            split_graph, node_ids, train_docs, context_budget(data_cfg), valid_node_ids=valid_ids,
+            split_graph, node_ids, docs, context_budget(data_cfg), valid_node_ids=valid_ids,
             sampling_strategy=data_cfg["sampling_strategy"],
             connectivity_weight=data_cfg["connectivity_weight"], temporal_weight=data_cfg["temporal_weight"],
             reciprocity_weight=data_cfg["reciprocity_weight"], overlap_weight=data_cfg["overlap_weight"],

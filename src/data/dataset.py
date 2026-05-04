@@ -246,9 +246,21 @@ class MultiScaleDocumentDataset(Dataset):
         from the row so missing values are treated as a consistent category rather than crashing with a KeyError.
         """
         authors = row["authors"]
-        # Guard against non-list encodings that may arrive from older CSV rows.
-        authors = authors[:self.max_authors] if isinstance(authors, list) else []
-        author_ids = [self.author_encoder[author] for author in authors]
+        if hasattr(authors, "to_list"):
+            authors = authors.to_list()
+        if not isinstance(authors, list):
+            authors = []
+        # Flatten if elements themselves are Series/lists (nested polars structures)
+        flat = []
+        for a in authors:
+            if hasattr(a, "to_list"):
+                flat.extend(a.to_list())
+            elif isinstance(a, list):
+                flat.extend(a)
+            elif a is not None:
+                flat.append(str(a))
+        authors = flat[:self.max_authors]
+        author_ids = [self.author_encoder.get(author, 0) for author in authors]
         # Pad the author list to a fixed length with 0 (the unknown/padding index).
         author_ids.extend([0] * max(0, self.max_authors - len(author_ids)))
 

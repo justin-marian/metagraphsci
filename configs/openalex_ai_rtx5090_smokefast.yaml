@@ -58,7 +58,7 @@ train:
   # ~5-7 minute budget on RTX 5090 (32 GB GDDR7, 1.79 TB/s).
   # Higher batch than Ada smokefast because 5090 has ~2x memory bandwidth
   # and 15% more BF16 TFLOPS, so bigger batch keeps the GPU saturated.
-  batch_size: 128
+  batch_size: 32
   num_workers: 8
   pretrain_epochs: 1
   finetune_epochs: 1
