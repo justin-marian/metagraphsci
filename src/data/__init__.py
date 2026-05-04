@@ -30,16 +30,39 @@ build_loader                - Create a DataLoader with project defaults.
 
 from __future__ import annotations
 
+from .cache_paths import cache_root, caching_enabled, docs_fingerprint
 from .context_caching import build_neighbor_cache, load_neighbor_cache, save_neighbor_cache
 from .dataset import MultiScaleDocumentDataset, NeighborCache, build_loader, create_tokenizer
+from .embedding_cache import (
+    build_embedding_cache, compute_embedding_metadata, embedding_is_compatible,
+    load_embedding_cache, save_embedding_cache)
+from .encoder_cache import (
+    build_encoder_cache, compute_encoder_metadata, encoder_is_compatible,
+    load_encoder_cache, save_encoder_cache)
+from .graph_cache import (
+    build_graph_cache, compute_graph_metadata, graph_is_compatible,
+    load_graph_cache, save_graph_cache)
 from .graph_utils import load_citation_graph, split_graphs
 from .tabular_utils import create_encoders, create_low_label_split, load_documents, prepare_documents, split_documents
+from .tokenization_cache import (
+    build_tokenization_cache, compute_tokenization_metadata,
+    load_tokenization_cache, save_tokenization_cache, tokenization_is_compatible)
 
 __all__ = [
     "MultiScaleDocumentDataset", "NeighborCache",
-    "build_loader", "build_neighbor_cache",
+    "build_embedding_cache", "build_encoder_cache", "build_graph_cache",
+    "build_loader", "build_neighbor_cache", "build_tokenization_cache",
+    "cache_root", "caching_enabled",
+    "compute_embedding_metadata", "compute_encoder_metadata",
+    "compute_graph_metadata", "compute_tokenization_metadata",
     "create_encoders", "create_low_label_split", "create_tokenizer",
-    "load_citation_graph", "load_documents", "load_neighbor_cache",
-    "prepare_documents", "save_neighbor_cache",
-    "split_documents", "split_graphs"
+    "docs_fingerprint",
+    "embedding_is_compatible", "encoder_is_compatible", "graph_is_compatible",
+    "load_citation_graph", "load_documents", "load_embedding_cache",
+    "load_encoder_cache", "load_graph_cache", "load_neighbor_cache",
+    "load_tokenization_cache",
+    "prepare_documents",
+    "save_embedding_cache", "save_encoder_cache", "save_graph_cache",
+    "save_neighbor_cache", "save_tokenization_cache",
+    "split_documents", "split_graphs", "tokenization_is_compatible"
 ]

@@ -89,7 +89,8 @@ class MultiScaleDocumentDataset(Dataset):
         cache_text:         bool = True,
         pretokenize_context: bool = False,
         hop_profile_dim:    int = 2,
-        spectral_dim:       int = 0) -> None:
+        spectral_dim:       int = 0,
+        pretokenized:       dict[int, dict[str, Tensor]] | None = None) -> None:
         """Initialise lookup structures and optional in-memory token caches.
 
         Parameters
@@ -149,7 +150,10 @@ class MultiScaleDocumentDataset(Dataset):
             int(row["doc_id"]): row
             for row in self.context_documents.iter_rows(named=True)
         }
-        self.text_cache: dict[int, dict[str, Tensor]] = {}
+        # Seed text cache from a precomputed disk-backed tokenisation when available.
+        # The dataset still owns this dict so on-the-fly tokenisations for newly
+        # encountered docs can be added without touching the shared lookup.
+        self.text_cache: dict[int, dict[str, Tensor]] = dict(pretokenized) if pretokenized else {}
         # A pre-built zero-tensor pair reused for all padding slots, avoiding
         # repeated zero tensor allocations inside the hot __getitem__ path.
         self.empty_text = self.build_empty_neighbor_text()

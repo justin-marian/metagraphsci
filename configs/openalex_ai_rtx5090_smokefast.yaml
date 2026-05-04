@@ -3,6 +3,11 @@ project:
   run_name: MetaGraphSci_openalex_ai_rtx5090_smokefast
   output_dir: runs/openalex_ai_rtx5090_smokefast
   cache_dir: cache/openalex_ai
+caching:
+  tokenization_cache: true
+  doc_embedding_cache: true
+  graph_split_cache: true
+  encoder_cache: true
 data:
   documents: data/openalex_ai/documents.parquet
   citations: data/openalex_ai/citations.parquet
@@ -22,6 +27,7 @@ data:
   reciprocity_weight: 0.15
   overlap_weight: 0.15
   k_hops: 2
+  cache_n_jobs: -1
   spectral_dim: 0
   enable_spectral: false
   max_seq_length: 128
