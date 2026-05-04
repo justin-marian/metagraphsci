@@ -352,6 +352,11 @@ class MetaGraphSciTrainerEval:
             unit="batch", leave=False, dynamic_ncols=True, disable=not show_bar)
 
         for batch in eval_bar:
+            # Defensive device placement: when evaluate() is called outside the
+            # accelerator-prepared pipeline (e.g., on the raw val_loader from
+            # pipeline.py after train_full_pipeline returns), batch tensors are
+            # still on CPU. A no-op when the loader is already prepared.
+            batch = {k: v.to(self.device) if isinstance(v, Tensor) else v for k, v in batch.items()}
             z, logits, batch_probs = self.forward(batch)
             loss = self.supervised_loss(logits, batch["labels"])
             total_loss += float(loss.detach().item())
