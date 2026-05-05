@@ -427,7 +427,10 @@ def main() -> None:
     save_frame(results_summary, output_root / "results_summary.csv")
 
     for metric in PRIMARY_METRICS: 
-        plot_seed_metric_trend(results_all, output_root / f"results_{metric}_seeds.png", metric=metric)
+        try:
+            plot_seed_metric_trend(results_all, output_root / f"results_{metric}_seeds.png", metric=metric)
+        except (ZeroDivisionError, ValueError) as _plot_err:
+            logger.warning(f"Skipping plot for {metric}: {_plot_err}")
 
     comparison_rows = results_summary.to_dicts() + baseline_rows
     if comparison_rows:
