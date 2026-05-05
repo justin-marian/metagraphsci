@@ -29,17 +29,20 @@ def main(n_docs: int) -> None:
     citations.write_parquet(DST / "citations.parquet")
 
     baselines_path = SRC / "baselines.parquet"
-    baselines = pl.read_parquet(baselines_path)
-    if "doc_id" in baselines.columns:
-        baselines = baselines.filter(pl.col("doc_id").is_in(surviving_ids))
-        baselines.write_parquet(DST / "baselines.parquet")
-    else:
-        shutil.copy(baselines_path, DST / "baselines.parquet")
+    baselines_n: int | str = "skipped (file missing)"
+    if baselines_path.exists():
+        baselines = pl.read_parquet(baselines_path)
+        if "doc_id" in baselines.columns:
+            baselines = baselines.filter(pl.col("doc_id").is_in(surviving_ids))
+            baselines.write_parquet(DST / "baselines.parquet")
+        else:
+            shutil.copy(baselines_path, DST / "baselines.parquet")
+        baselines_n = len(baselines)
 
     print(f"Wrote {DST}/")
     print(f"  documents:  {len(docs):>7}")
     print(f"  citations:  {len(citations):>7}")
-    print(f"  baselines:  {len(baselines):>7}")
+    print(f"  baselines:  {baselines_n}")
 
 
 if __name__ == "__main__":
