@@ -1,4 +1,5 @@
 import argparse
+import gc
 import json
 import random
 from pathlib import Path
@@ -379,6 +380,9 @@ def main() -> None:
         for seed in seeds:
             set_seed(seed)
             bundle = build_run_bundle(cfg, seed)
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             run_dir = output_root / ablation / f"seed_{seed}"
             artifact_root = run_dir / "artifacts"
             artifact_root.mkdir(parents=True, exist_ok=True)
@@ -421,6 +425,14 @@ def main() -> None:
             (artifact_root / "run_summary.json").write_text(json.dumps(summary, indent=2))
             row_metrics = {metric: summary[metric] for metric in PRIMARY_METRICS if metric in summary}
             all_run_rows.append({"method": "MetaGraphSci", "dataset": benchmark, "ablation": ablation, "seed": seed, **row_metrics })
+
+            del trainer, result, val_result
+            del pretrain_loader, labeled_loader, unlabeled_loader, val_loader, test_loader
+            del bundle
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
 
     results_all, results_summary = aggregate_seed_results(all_run_rows, metrics=PRIMARY_METRICS)
     save_frame(results_all, output_root / "results_all_runs.csv")
