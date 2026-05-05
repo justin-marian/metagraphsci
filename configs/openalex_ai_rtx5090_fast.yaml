@@ -41,8 +41,8 @@ model:
   lora_r: 8
   lora_alpha: 16
   lora_dropout: 0.1
-  # Disabled: at seq 256 + context 8 + batch 64 on 32GB, footprint is ~10-14 GB.
-  gradient_checkpointing: false
+  # Enabled: empirically OOM on RTX 5090 32GB without it at seq 256 + context 8 + batch 48.
+  gradient_checkpointing: true
   freeze_backbone_until_layer: 6
   citation_heads: 4
   citation_layers: 2
@@ -56,10 +56,9 @@ model:
   hybrid_alpha_init: -2.0
 train:
   # RTX 5090 (32 GB GDDR7, ~105 BF16 TFLOPS, 1.79 TB/s).
-  # Batch 64 is bumped up from Ada's 48 because 5090 has ~2x memory bandwidth
-  # and the 32GB ceiling is still well above what we need (~14 GB).
-  # If you OOM on the first step, drop to batch_size: 48.
-  batch_size: 64
+  # 48 with gradient_checkpointing fits comfortably; batch 64 OOMs at first step
+  # (32 GB ceiling exceeded with seq 256 + context 8 + 2 ablations).
+  batch_size: 48
   num_workers: 8
   pretrain_epochs: 1
   finetune_epochs: 2
