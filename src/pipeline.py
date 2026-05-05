@@ -388,9 +388,12 @@ def main() -> None:
             artifact_root.mkdir(parents=True, exist_ok=True)
 
             trainer_cfg = {
-                "output_dir": str(run_dir), "mixed_precision": "fp16" if torch.cuda.is_available() else "no",
-                "gradient_accumulation_steps": cfg["trainer"]["gradient_accumulation_steps"],
-                "ablation_mode": ablation, "run_name": f"{benchmark}_{ablation}_seed_{seed}", **cfg["trainer"]
+                **cfg["trainer"],                # YAML defaults — overrideable
+                "output_dir":  str(run_dir),
+                "ablation_mode": ablation,      # always honours the loop variable
+                "run_name":    f"{benchmark}_{ablation}_seed_{seed}",
+                # mixed_precision is set in DEFAULTS as "no"; let users opt-in
+                # via their config rather than forcing fp16 here.
             }
 
             trainer = MetaGraphSciTrainerEval(
