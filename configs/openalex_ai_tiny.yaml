@@ -1,0 +1,92 @@
+project:
+  benchmark: openalex_ai_tiny
+  run_name: MetaGraphSci_openalex_ai_tiny
+  output_dir: runs/openalex_ai_tiny
+  cache_dir: cache/openalex_ai_tiny
+caching:
+  tokenization_cache: true
+  doc_embedding_cache: true
+  graph_split_cache: true
+  encoder_cache: true
+data:
+  documents: data/openalex_ai_tiny/documents.parquet
+  citations: data/openalex_ai_tiny/citations.parquet
+  baselines: data/openalex_ai_tiny/baselines.parquet
+  label_column: label
+  source_col: source
+  target_col: target
+  split_strategy: time
+  graph_mode: transductive
+  label_ratio: 0.05
+  test_size: 0.1
+  val_size: 0.1
+  max_context_size: 2
+  sampling_strategy: local_relevance
+  connectivity_weight: 0.35
+  temporal_weight: 0.35
+  reciprocity_weight: 0.15
+  overlap_weight: 0.15
+  k_hops: 0
+  cache_n_jobs: -1
+  spectral_dim: 0
+  enable_spectral: false
+  max_seq_length: 64
+  max_authors: null
+  cache_text: true
+  pretokenize_context: true
+model:
+  tokenizer_name: allenai/scibert_scivocab_uncased
+  text_dim: 768
+  metadata_dim: 256
+  citation_dim: 256
+  fusion_dim: 512
+  classifier_scale: 10.0
+  metadata_embedding_dim: 64
+  metadata_cross_layers: 3
+  peft_mode: lora
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.1
+  gradient_checkpointing: false
+  freeze_backbone_until_layer: 6
+  citation_heads: 4
+  citation_layers: 2
+  citation_ff_dim: 512
+  selector_hidden_dim: 256
+  selector_top_k: 4
+  citation_dropout: 0.1
+  fusion_modality_dropout: 0.1
+  use_latent_graph: true
+  latent_graph_top_k: 2
+  hybrid_alpha_init: -2.0
+train:
+  batch_size: 32
+  num_workers: 4
+  pretrain_epochs: 1
+  finetune_epochs: 1
+  seeds:
+    - 42
+  ablations:
+    - full
+trainer:
+  mixed_precision: bf16
+  gradient_accumulation_steps: 1
+  pretrain_lr: 2.0e-05
+  finetune_lr: 1.0e-05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  selection_metric: macro_f1
+  lambda_ssl: 1.0
+  contrastive_temperature: 0.07
+  metadata_negative_weight: 0.25
+  ssl_text_dropout: 0.15
+  pseudo_label:
+    beta: 0.9
+    temperature: 1.0
+    warmup_epochs: 1
+    min_per_class: 1
+    ema_momentum: 0.9
+    distributionalignment: true
+  use_mlflow: false
+  mlflow_experiment: MetaGraphSci_openalex_ai_tiny
+  use_wandb: false
