@@ -1,203 +1,105 @@
 project:
-  benchmark: cs_ai                   # Active dataset / benchmark
-  # benchmark options:
-  #   cs_ai
-  #   medicine
-  #   physics
-  #   economics
-  #   social_science
-  #   law
-
-  run_name: metagraphsci_cs_ai       # Active experiment run name
-  # run_name examples:
-  #   metagraphsci_cs_ai
-  #   metagraphsci_medicine
-  #   metagraphsci_physics
-  #   metagraphsci_economics
-  #   metagraphsci_social_science
-  #   metagraphsci_law
-
-  output_dir: runs/metagraphsci      # Checkpoints, logs, predictions, and reports
-  cache_dir: cache/metagraphsci      # Cached intermediate artifacts
-
+  benchmark: cs_ai
+  run_name: MetaGraphSci_cs_ai_stable
+  output_dir: runs/metagraphsci/cs_ai_stable
+  cache_dir: cache/metagraphsci/cs_ai
+caching:
+  tokenization_cache: true
+  doc_embedding_cache: true
+  graph_split_cache: true
+  encoder_cache: true
+  neighbor_cache: true
 data:
-  documents: data/cs_ai/documents.csv   # Active document table
-  # documents options:
-  #   data/cs_ai/documents.csv
-  #   data/medicine/documents.csv
-  #   data/physics/documents.csv
-  #   data/economics/documents.csv
-  #   data/social_science/documents.csv
-  #   data/law/documents.csv
-
-  citations: data/cs_ai/citations.csv   # Active citation edge list
-  # citations options:
-  #   data/cs_ai/citations.csv
-  #   data/medicine/citations.csv
-  #   data/physics/citations.csv
-  #   data/economics/citations.csv
-  #   data/social_science/citations.csv
-  #   data/law/citations.csv
-
-  baselines: ""                         # Optional auxiliary features file; empty means unused
-  # baselines options:
-  #   ""
-  #   data/cs_ai/baselines.csv
-  #   data/medicine/baselines.csv
-  #   data/physics/baselines.csv
-  #   data/economics/baselines.csv
-  #   data/social_science/baselines.csv
-  #   data/law/baselines.csv
-
-  label_column: label                # Target class column used for supervision
-  source_col: source                 # Citation source node column
-  target_col: target                 # Citation target node column
-
-  split_strategy: time               # Recommended for paper graphs to avoid future leakage
-  # split_strategy options:
-  #   time
-  #   random
-
-  graph_mode: transductive           # Full graph visible; labels remain split-controlled
-  # graph_mode options:
-  #   transductive
-  #   inductive
-  #   train_plus_eval
-
-  label_ratio: 0.1                   # Fraction of train labels exposed as supervised labels
-  # label_ratio examples:
-  #   0.01
-  #   0.05
-  #   0.10
-  #   0.25
-  #   1.00
-
-  test_size: 0.2                     # Test split ratio
-  val_size: 0.1                      # Validation split ratio
-
-  max_context_size: 18               # Maximum number of graph/context neighbors per sample
-  sampling_strategy: local_relevance # Context neighbor selection strategy
-  # sampling_strategy options:
-  #   local_relevance
-  #   top_k
-
-  connectivity_weight: 0.55          # Structural connectivity contribution
-  temporal_weight: 0.15              # Publication-time relevance contribution
-  reciprocity_weight: 0.05           # Mutual-citation contribution
-  overlap_weight: 0.25               # Neighborhood-overlap contribution
-
-  k_hops: 2                          # Hop depth for local graph profiles
-  spectral_dim: 0                    # 0 disables spectral embeddings
-  enable_spectral: false             # Enable Laplacian spectral features
-
-  max_seq_length: 512                # Transformer token budget
-  max_authors: null                  # Null means keep all available authors
-
-  cache_text: true                   # Cache tokenized text features
-  pretokenize_context: true          # Tokenize context docs before training starts
-  hub_degree_threshold: 0            # 0 disables hub filtering
-  max_graph_nodes_for_hops: 500      # Safety limit for expensive hop expansion
-
+  documents: data/cs_ai/documents.csv
+  citations: data/cs_ai/citations.csv
+  baselines: ''
+  label_column: label
+  source_col: source
+  target_col: target
+  split_strategy: time
+  graph_mode: transductive
+  label_ratio: 0.25
+  test_size: 0.2
+  val_size: 0.1
+  max_context_size: 8
+  sampling_strategy: local_relevance
+  connectivity_weight: 0.45
+  temporal_weight: 0.25
+  reciprocity_weight: 0.1
+  overlap_weight: 0.2
+  k_hops: 2
+  cache_n_jobs: -1
+  spectral_dim: 0
+  enable_spectral: false
+  max_seq_length: 256
+  max_authors: null
+  cache_text: true
+  pretokenize_context: true
+  hub_degree_threshold: 0
+  max_graph_nodes_for_hops: 5000
 model:
-  tokenizer_name: allenai/scibert    # Scientific text tokenizer / encoder backbone
-  # tokenizer_name options:
-  #   allenai/scibert
-  #   allenai/scibert_scivocab_uncased
-  #   bert-base-uncased
-
-  text_dim: 768                      # Text encoder output size
-  metadata_dim: 256                  # Metadata encoder output size
-  citation_dim: 256                  # Citation encoder output size
-  fusion_dim: 512                    # Joint multimodal fusion size
-
-  classifier_scale: 10.0             # Classifier logit scale
-  metadata_embedding_dim: 64         # Base metadata embedding size
-  metadata_cross_layers: 3           # Metadata interaction depth
-
-  peft_mode: qlora                   # Parameter-efficient fine-tuning mode
-  # peft_mode options:
-  #   qlora
-  #   lora
-  #   none
-
-  lora_r: 8                          # LoRA rank
-  lora_alpha: 16                     # LoRA scaling factor
-  lora_dropout: 0.1                  # LoRA dropout
-
-  gradient_checkpointing: true       # Trade compute for lower memory usage
-  freeze_backbone_until_layer: 6     # Freeze early transformer layers
-
-  citation_heads: 4                  # Attention heads in citation encoder
-  citation_layers: 2                 # Citation encoder depth
-  citation_ff_dim: 512               # Citation feed-forward width
-
-  selector_hidden_dim: 256           # Hidden size of context selector
-  selector_top_k: 8                  # Number of retained context items
-
-  citation_dropout: 0.1              # Citation branch dropout
-  fusion_modality_dropout: 0.1       # Fusion-layer dropout
-
-  use_latent_graph: true             # Learn latent graph edges on top of explicit citation graph
-  latent_graph_top_k: 4              # Number of latent neighbors kept
-  hybrid_alpha_init: -2.0            # Initial hybrid mixing parameter
-
+  tokenizer_name: allenai/scibert_scivocab_uncased
+  text_dim: 768
+  metadata_dim: 256
+  citation_dim: 256
+  fusion_dim: 512
+  classifier_scale: 8.0
+  metadata_embedding_dim: 64
+  metadata_cross_layers: 2
+  peft_mode: lora
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.1
+  gradient_checkpointing: true
+  freeze_backbone_until_layer: 6
+  citation_heads: 4
+  citation_layers: 2
+  citation_ff_dim: 512
+  selector_hidden_dim: 256
+  selector_top_k: 6
+  citation_dropout: 0.15
+  fusion_modality_dropout: 0.15
+  use_latent_graph: true
+  latent_graph_top_k: 3
+  hybrid_alpha_init: -2.0
 train:
-  batch_size: 8                      # Per-step batch size
-  num_workers: 2                     # Dataloader worker count
-
-  pretrain_epochs: 2                 # Self-supervised or warmup stage
-  finetune_epochs: 3                 # Supervised fine-tuning stage
-
+  batch_size: 8
+  num_workers: 2
+  pretrain_epochs: 3
+  finetune_epochs: 25
   seeds:
-    - 42
-    - 1337
-    - 2025
-
+  - 42
+  - 1337
+  - 2025
   ablations:
-    - full
-    - text_only
-    - text_metadata
-    - text_citation
-  # ablation options:
-  #   full
-  #   text_only
-  #   text_metadata
-  #   text_citation
-
+  - text_only
+  - text_metadata
+  - full
 trainer:
-  mixed_precision: fp16              # Reduced-precision training mode
-  # mixed_precision options:
-  #   fp16
-  #   bf16
-  #   fp32
-
-  gradient_accumulation_steps: 2     # Optimizer step every N batches
-
-  pretrain_lr: 5.0e-05               # Learning rate for pretraining
-  finetune_lr: 6.0e-05               # Learning rate for fine-tuning
-  weight_decay: 0.01                 # L2-style regularization
-  max_grad_norm: 1.0                 # Gradient clipping threshold
-
-  selection_metric: macro_f1         # Best-checkpoint selection metric
-  # selection_metric options:
-  #   macro_f1
-  #   micro_f1
-  #   accuracy
-  #   loss
-
-  lambda_ssl: 1.0                    # Self-supervised loss weight
-  contrastive_temperature: 0.07      # Contrastive softmax temperature
-  metadata_negative_weight: 0.25     # Extra metadata negative weight
-  ssl_text_dropout: 0.15             # Corruption strength for SSL text views
-
+  mixed_precision: bf16
+  gradient_accumulation_steps: 4
+  pretrain_lr: 1.0e-05
+  finetune_lr: 2.0e-05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  lr_warmup_fraction: 0.08
+  selection_metric: macro_f1
+  label_smoothing: 0.05
+  lambda_ssl: 0.0
+  lambda_ssl_final: 0.25
+  supervised_warmup_epochs: 5
+  pseudo_ramp_epochs: 8
+  min_pseudo_confidence: 0.7
+  contrastive_temperature: 0.1
+  metadata_negative_weight: 0.25
+  ssl_text_dropout: 0.1
   pseudo_label:
     beta: 0.9
-    temperature: 1.0
-    warmup_epochs: 1
-    min_per_class: 1
-    ema_momentum: 0.9
-    distributionalignment: true
-
-  use_mlflow: true                   # Enable MLflow tracking
-  mlflow_experiment: MetaGraphSci    # MLflow experiment name
-  use_wandb: false                   # Enable or disable Weights & Biases
+    temperature: 0.75
+    warmup_epochs: 5
+    min_per_class: 0
+    ema_momentum: 0.98
+    distributionalignment: false
+  use_mlflow: true
+  mlflow_experiment: MetaGraphSci_openalex_ai
+  use_wandb: false

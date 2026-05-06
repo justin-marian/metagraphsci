@@ -1,8 +1,14 @@
 project:
   benchmark: openalex_ai
-  run_name: MetaGraphSci_openalex_ai_intel
-  output_dir: runs/openalex_ai_intel
+  run_name: MetaGraphSci_openalex_ai_intel_stable
+  output_dir: runs/openalex_ai_intel_stable
   cache_dir: cache/openalex_ai
+caching:
+  tokenization_cache: true
+  doc_embedding_cache: true
+  graph_split_cache: true
+  encoder_cache: true
+  neighbor_cache: true
 data:
   documents: data/openalex_ai/documents.parquet
   citations: data/openalex_ai/citations.parquet
@@ -12,33 +18,34 @@ data:
   target_col: target
   split_strategy: time
   graph_mode: transductive
-  label_ratio: 0.1
+  label_ratio: 0.25
   test_size: 0.2
   val_size: 0.1
-  # Smaller context to fit Intel Arc / Iris Xe VRAM (8-16GB typical).
-  max_context_size: 12
+  max_context_size: 4
   sampling_strategy: local_relevance
-  connectivity_weight: 0.35
-  temporal_weight: 0.35
-  reciprocity_weight: 0.15
-  overlap_weight: 0.15
+  connectivity_weight: 0.45
+  temporal_weight: 0.25
+  reciprocity_weight: 0.1
+  overlap_weight: 0.2
   k_hops: 2
+  cache_n_jobs: -1
   spectral_dim: 0
   enable_spectral: false
-  # Trim sequence length to halve attention memory cost on consumer Intel GPUs.
-  max_seq_length: 256
+  max_seq_length: 128
   max_authors: null
   cache_text: true
   pretokenize_context: true
+  hub_degree_threshold: 0
+  max_graph_nodes_for_hops: 5000
 model:
   tokenizer_name: allenai/scibert_scivocab_uncased
   text_dim: 768
   metadata_dim: 256
   citation_dim: 256
   fusion_dim: 512
-  classifier_scale: 10.0
+  classifier_scale: 8.0
   metadata_embedding_dim: 64
-  metadata_cross_layers: 3
+  metadata_cross_layers: 2
   peft_mode: lora
   lora_r: 8
   lora_alpha: 16
@@ -49,44 +56,47 @@ model:
   citation_layers: 2
   citation_ff_dim: 512
   selector_hidden_dim: 256
-  selector_top_k: 8
-  citation_dropout: 0.1
-  fusion_modality_dropout: 0.1
+  selector_top_k: 4
+  citation_dropout: 0.15
+  fusion_modality_dropout: 0.15
   use_latent_graph: true
-  latent_graph_top_k: 4
+  latent_graph_top_k: 2
   hybrid_alpha_init: -2.0
 train:
-  # Intel Arc A770 16GB: batch_size 4-8, grad_accum 4
-  # Intel Arc A750/A580 8GB or Iris Xe: batch_size 2, grad_accum 8
   batch_size: 4
-  # Windows + PyTorch DataLoader: keep workers low to avoid spawn overhead.
   num_workers: 0
   pretrain_epochs: 2
-  finetune_epochs: 3
+  finetune_epochs: 15
   seeds:
-    - 42
+  - 42
   ablations:
-    - full
+  - text_only
+  - full
 trainer:
-  # Intel Arc / Battlemage have native bf16 ALUs; prefer bf16 over fp16 (more stable).
   mixed_precision: bf16
-  gradient_accumulation_steps: 4
-  pretrain_lr: 2.0e-05
-  finetune_lr: 1.0e-05
+  gradient_accumulation_steps: 8
+  pretrain_lr: 8.0e-06
+  finetune_lr: 1.5e-05
   weight_decay: 0.01
   max_grad_norm: 1.0
+  lr_warmup_fraction: 0.08
   selection_metric: macro_f1
-  lambda_ssl: 1.0
-  contrastive_temperature: 0.07
+  label_smoothing: 0.05
+  lambda_ssl: 0.0
+  lambda_ssl_final: 0.25
+  supervised_warmup_epochs: 5
+  pseudo_ramp_epochs: 8
+  min_pseudo_confidence: 0.7
+  contrastive_temperature: 0.1
   metadata_negative_weight: 0.25
-  ssl_text_dropout: 0.15
+  ssl_text_dropout: 0.1
   pseudo_label:
     beta: 0.9
-    temperature: 1.0
-    warmup_epochs: 1
-    min_per_class: 1
-    ema_momentum: 0.9
-    distributionalignment: true
+    temperature: 0.75
+    warmup_epochs: 5
+    min_per_class: 0
+    ema_momentum: 0.98
+    distributionalignment: false
   use_mlflow: false
   mlflow_experiment: MetaGraphSci_openalex_ai
   use_wandb: false

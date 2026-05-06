@@ -78,6 +78,21 @@ def label_names_from_numeric(df: pl.DataFrame, label_column: str) -> list[str]:
     return [str(label) for label in sorted(values)]
 
 
+
+
+def map_numeric_labels(df: pl.DataFrame, label_column: str) -> tuple[pl.DataFrame, list[str]]:
+    """Map arbitrary numeric labels to contiguous ids required by CrossEntropyLoss."""
+    values = sorted(int(v) for v in df.drop_nulls(label_column)[label_column].unique().to_list())
+    mapping = {old: new for new, old in enumerate(values)}
+    mapped = df.with_columns(
+        pl.col(label_column)
+        .cast(pl.Int64, strict=False)
+        .replace(mapping)
+        .cast(pl.Int64)
+        .alias("label")
+    )
+    return mapped, [str(v) for v in values]
+
 def map_string_labels(df: pl.DataFrame, label_column: str) -> tuple[pl.DataFrame, list[str]]:
     """
     Map string labels to contiguous integer ids in deterministic sorted order.
@@ -127,9 +142,9 @@ def prepare_documents(documents: pl.DataFrame, label_column: str = "label") -> t
     label_names: list[str] | None = None
     if label_column in df.columns:
         if df[label_column].dtype.is_numeric():
-            # Labels are already integers just enforce int64 dtype.
-            df = df.with_columns(pl.col(label_column).cast(pl.Int64).alias("label"))
-            label_names = label_names_from_numeric(df, "label")
+            # External numeric labels are not guaranteed to be zero-based or contiguous.
+            # CrossEntropyLoss expects targets in [0, num_classes).
+            df, label_names = map_numeric_labels(df, label_column)
         else:
             # String labels: sort => assign contiguous integers => store mapping.
             df, label_names = map_string_labels(df, label_column)

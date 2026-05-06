@@ -1,8 +1,14 @@
 project:
   benchmark: openalex_ai
-  run_name: MetaGraphSci_openalex_ai_smoke
-  output_dir: runs/openalex_ai_smoke
-  cache_dir: cache/openalex_ai   # shared with full config so caches are reused
+  run_name: MetaGraphSci_openalex_ai_smoke_stable
+  output_dir: runs/openalex_ai_smoke_stable
+  cache_dir: cache/openalex_ai
+caching:
+  tokenization_cache: true
+  doc_embedding_cache: true
+  graph_split_cache: true
+  encoder_cache: true
+  neighbor_cache: true
 data:
   documents: data/openalex_ai/documents.parquet
   citations: data/openalex_ai/citations.parquet
@@ -12,78 +18,85 @@ data:
   target_col: target
   split_strategy: time
   graph_mode: transductive
-  label_ratio: 0.1
-  test_size: 0.2
+  label_ratio: 0.35
+  test_size: 0.1
   val_size: 0.1
-  max_context_size: 18
+  max_context_size: 4
   sampling_strategy: local_relevance
-  connectivity_weight: 0.35
-  temporal_weight: 0.35
-  reciprocity_weight: 0.15
-  overlap_weight: 0.15
+  connectivity_weight: 0.45
+  temporal_weight: 0.25
+  reciprocity_weight: 0.1
+  overlap_weight: 0.2
   k_hops: 2
+  cache_n_jobs: -1
   spectral_dim: 0
   enable_spectral: false
-  max_seq_length: 512
+  max_seq_length: 128
   max_authors: null
   cache_text: true
   pretokenize_context: true
+  hub_degree_threshold: 0
+  max_graph_nodes_for_hops: 5000
 model:
   tokenizer_name: allenai/scibert_scivocab_uncased
   text_dim: 768
   metadata_dim: 256
   citation_dim: 256
   fusion_dim: 512
-  classifier_scale: 10.0
+  classifier_scale: 8.0
   metadata_embedding_dim: 64
-  metadata_cross_layers: 3
+  metadata_cross_layers: 2
   peft_mode: lora
   lora_r: 8
   lora_alpha: 16
   lora_dropout: 0.1
-  gradient_checkpointing: true
+  gradient_checkpointing: false
   freeze_backbone_until_layer: 6
   citation_heads: 4
   citation_layers: 2
   citation_ff_dim: 512
   selector_hidden_dim: 256
-  selector_top_k: 8
-  citation_dropout: 0.1
-  fusion_modality_dropout: 0.1
+  selector_top_k: 4
+  citation_dropout: 0.15
+  fusion_modality_dropout: 0.15
   use_latent_graph: true
-  latent_graph_top_k: 4
+  latent_graph_top_k: 2
   hybrid_alpha_init: -2.0
 train:
-  # Smoke test: 1 seed × 1 ablation × 1+1 epochs to validate end-to-end.
-  # batch_size 64 is tuned for H200 (141GB). For RTX 6000 Ada (48GB) use the
-  # dedicated configs/openalex_ai_rtx6000_ada_smoke.yaml instead — batch 64 OOMs there.
-  batch_size: 64
-  num_workers: 8
+  batch_size: 32
+  num_workers: 4
   pretrain_epochs: 1
-  finetune_epochs: 1
+  finetune_epochs: 6
   seeds:
-    - 42
+  - 42
   ablations:
-    - full
+  - text_only
+  - full
 trainer:
-  mixed_precision: fp16
+  mixed_precision: bf16
   gradient_accumulation_steps: 1
-  pretrain_lr: 2.0e-05
-  finetune_lr: 1.0e-05
+  pretrain_lr: 1.0e-05
+  finetune_lr: 2.0e-05
   weight_decay: 0.01
   max_grad_norm: 1.0
+  lr_warmup_fraction: 0.08
   selection_metric: macro_f1
-  lambda_ssl: 1.0
-  contrastive_temperature: 0.07
+  label_smoothing: 0.05
+  lambda_ssl: 0.0
+  lambda_ssl_final: 0.25
+  supervised_warmup_epochs: 5
+  pseudo_ramp_epochs: 8
+  min_pseudo_confidence: 0.7
+  contrastive_temperature: 0.1
   metadata_negative_weight: 0.25
-  ssl_text_dropout: 0.15
+  ssl_text_dropout: 0.1
   pseudo_label:
     beta: 0.9
-    temperature: 1.0
-    warmup_epochs: 1
-    min_per_class: 1
-    ema_momentum: 0.9
-    distributionalignment: true
-  use_mlflow: false   # avoid polluting the real experiment tracking server
-  mlflow_experiment: MetaGraphSci_openalex_ai_smoke
+    temperature: 0.75
+    warmup_epochs: 5
+    min_per_class: 0
+    ema_momentum: 0.98
+    distributionalignment: false
+  use_mlflow: false
+  mlflow_experiment: MetaGraphSci_openalex_ai
   use_wandb: false

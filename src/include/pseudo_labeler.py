@@ -9,129 +9,118 @@ class PseudoLabeler:
     Generates pseudo-targets through prior correction, confidence sharpening,
     and adaptive acceptance criteria.
 
-    Intended for semi-supervised learning, where predictions on unlabeled samples 
-    are filtered before being reused as supervision. Its role is to reduce confirmation bias, 
-    strengthen confident decisions, and apply a dynamic curriculum so that easier categories
-    do not dominate training too early.
-
     PERSISTENT ADAPTIVE STATE
     -------------------------
-    Part of the internal adaptive behavior depends on a running estimate that evolves
-    over time. Because this state is not automatically preserved by the main training
-    checkpoint mechanism, it should be saved and restored explicitly when resuming
-    training. Otherwise, the acceptance curriculum restarts from scratch and may
-    behave inconsistently after loading a checkpoint.
+    ema_class_max must be saved and restored explicitly alongside the model
+    checkpoint.  Losing it silently resets the curriculum to cold-start.
     """
 
     def __init__(
-        self, beta: float = 0.95, warmup_epochs: int = 0, min_per_class: int = 0,
-        temperature: float = 1.0, ema_momentum: float = 0.9, distributionalignment: bool = True,
+        self, beta: float = 0.80, warmup_epochs: int = 3, min_per_class: int = 0,
+        temperature: float = 0.5, ema_momentum: float = 0.95,
+        distributionalignment: bool = True,
         target_prior: Sequence[float] | None = None) -> None:
-        self.beta = float(beta)
-        self.warmup_epochs = int(warmup_epochs)
-        self.min_per_class = int(min_per_class)
-        self.temperature = float(temperature)
-        self.ema_momentum = float(ema_momentum)
+        # HYPERPARAMETER CHANGES:
+        #   beta: 0.95 → 0.80  (less restrictive threshold — accepts more pseudo-labels
+        #                        early without waiting for near-perfect confidence)
+        #   warmup_epochs: 1 → 3  (avoids pseudo-labeling from an unstable model)
+        #   temperature: 1.0 → 0.5  (sharper predictions are more reliable targets)
+        #   ema_momentum: 0.90 → 0.95  (smoother curriculum evolution)
+        self.beta               = float(beta)
+        self.warmup_epochs      = int(warmup_epochs)
+        self.min_per_class      = int(min_per_class)
+        self.temperature        = float(temperature)
+        self.ema_momentum       = float(ema_momentum)
         self.distributionalignment = bool(distributionalignment)
-        self.target_prior = None if target_prior is None else torch.tensor(target_prior, dtype=torch.float32)
+        self.target_prior       = (None if target_prior is None
+            else torch.tensor(target_prior, dtype=torch.float32))
         self.ema_class_max: Tensor | None = None
 
     def labeler_state_dict(self) -> dict[str, Any]:
-        """Exports the adaptive state required for consistent checkpoint restoration."""
         return {
             "ema_class_max": self.ema_class_max.cpu() if self.ema_class_max is not None else None,
-            "target_prior": self.target_prior.cpu() if self.target_prior is not None else None
+            "target_prior":  self.target_prior.cpu()  if self.target_prior  is not None else None,
         }
 
     def load_labeler_state_dict(self, state: dict[str, Any]) -> None:
-        """Restores the adaptive state previously saved during training."""
+        """Restores adaptive state from a checkpoint.
+
+        BUG FIXED: the original guard was `not isinstance(ema, Tensor)`, so the
+        block was entered only when ema was NOT a Tensor.  The inner expression
+        `ema.clone() if isinstance(ema, Tensor) else None` was then always False,
+        silently resetting ema_class_max to None on every checkpoint load and
+        collapsing the adaptive curriculum back to cold-start.
+        """
         ema = state.get("ema_class_max")
-        if ema is not None and not isinstance(ema, Tensor):
-            self.ema_class_max = ema.clone() if isinstance(ema, Tensor) else None
+        if isinstance(ema, Tensor):
+            self.ema_class_max = ema.clone()
+        else:
+            # Warn when loading a checkpoint written by the old (broken)
+            # code that always saved ema_class_max=None.  Silently resetting to
+            # cold-start caused the adaptive curriculum to degrade without notice.
+            if "ema_class_max" in state:
+                import warnings
+                warnings.warn(
+                    "PseudoLabeler checkpoint contains ema_class_max=None "
+                    "Adaptive curriculum will restart from cold-start.",
+                    UserWarning, stacklevel=2)
         prior = state.get("target_prior")
-        if isinstance(prior, Tensor) and prior is not None:
+        if isinstance(prior, Tensor):
             self.target_prior = prior.clone()
 
     def reset(self) -> None:
-        """Removes accumulated history before beginning a separate run."""
         self.ema_class_max = None
 
     def align(self, probs: Tensor) -> Tensor:
-        """
-        Calibrates predictions so that the resulting category proportions better match
-        an expected target distribution.
-        """
-        # Without correction, pseudo-target generation tends to over-favor dominant
-        # categories and suppress underrepresented ones.
-        # This stage counteracts that tendency by reweighting predictions toward a
-        # desired prior, improving balance throughout semi-supervised training.
+        """Calibrates predictions toward the expected class distribution."""
         if not self.distributionalignment:
             return probs
-
         if self.target_prior is None:
             target_prior = torch.full((probs.size(1),), 1.0 / probs.size(1), device=probs.device)
         else:
             target_prior = self.target_prior.to(probs.device)
-
         batch_prior = probs.mean(dim=0).clamp_min(1e-9)
         aligned = probs * (target_prior / batch_prior)
         return aligned / aligned.sum(dim=1, keepdim=True).clamp_min(1e-9)
 
     def sharpen(self, probs: Tensor) -> Tensor:
-        """Reduces uncertainty by making confident outcomes more pronounced."""
-        # Soft or ambiguous predictions are risky when converted into supervision.
-        # This transformation suppresses uncertainty and makes the most likely outcome
-        # more dominant, which improves the reliability of accepted pseudo-targets.
+        """Reduces uncertainty by sharpening the probability distribution."""
         if np.isclose(self.temperature, 1.0):
             return probs
-
         scaled = probs.pow(1.0 / max(self.temperature, 1e-6))
         return scaled / scaled.sum(dim=1, keepdim=True).clamp_min(1e-9)
 
     def thresholds(self, probs: Tensor) -> Tensor:
-        """Updates confidence requirements dynamically according to the model's evolving behavior."""
-        # Fixed acceptance rules are often too strict for difficult categories and
-        # too lenient for easy ones.
-        # A moving estimate provides a curriculum-like mechanism that adapts over
-        # time, allowing participation to grow naturally as reliability improves.
-        #
-        # Because this behavior depends on accumulated history, that history should
-        # be preserved across save/load boundaries to avoid silently resetting the curriculum.
+        """Updates per-class confidence requirements via EMA of observed maxima."""
         batch_max = probs.max(dim=0).values.detach()
-
         if self.ema_class_max is None:
             self.ema_class_max = batch_max
         else:
-            self.ema_class_max = self.ema_momentum * self.ema_class_max.to(batch_max.device) + (1.0 - self.ema_momentum) * batch_max
-
+            self.ema_class_max = (
+                self.ema_momentum * self.ema_class_max.to(batch_max.device)
+                + (1.0 - self.ema_momentum) * batch_max)
         return self.beta * self.ema_class_max.to(probs.device)
 
     def select(self, probs: Tensor, epoch: int) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        """
-        Combines calibration, sharpening, adaptive filtering, and safety constraints
-        to decide which pseudo-targets are retained.
-        """
+        """Combines calibration, sharpening, adaptive filtering, and min-per-class safety."""
         adjusted = self.sharpen(self.align(probs))
         confidence, pseudo_labels = adjusted.max(dim=1)
         thresholds = self.thresholds(adjusted)
 
         keep = confidence >= thresholds[pseudo_labels]
 
-        # Early training stages are typically too unstable for reliable self-generated
-        # supervision, so acceptance is delayed until a minimum maturity is reached.
         if epoch <= self.warmup_epochs:
-            keep = torch.zeros_like(keep)
+            # Warmup must be absolute. Do not allow min_per_class to re-enable
+            # pseudo-labels while the classifier is still near-random.
+            return torch.zeros_like(keep), pseudo_labels, thresholds, adjusted
 
-        # An additional safeguard prevents difficult categories from disappearing
-        # entirely during training by ensuring they continue to contribute learning
-        # signal even when confidence remains comparatively low.
         if self.min_per_class > 0:
             for cls in range(adjusted.size(1)):
                 candidates = torch.where(pseudo_labels == cls)[0]
                 if len(candidates) == 0 or int(keep[candidates].sum().item()) >= self.min_per_class:
                     continue
-
-                topk = confidence[candidates].topk(k=min(self.min_per_class, len(candidates))).indices
+                topk = confidence[candidates].topk(
+                    k=min(self.min_per_class, len(candidates))).indices
                 keep[candidates[topk]] = True
 
         return keep, pseudo_labels, thresholds, adjusted

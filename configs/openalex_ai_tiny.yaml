@@ -1,8 +1,8 @@
 project:
-  benchmark: openalex_ai
-  run_name: MetaGraphSci_openalex_ai_rtx6000_ada_smoke_stable
-  output_dir: runs/openalex_ai_rtx6000_ada_smoke_stable
-  cache_dir: cache/openalex_ai
+  benchmark: openalex_ai_tiny
+  run_name: MetaGraphSci_openalex_ai_tiny_debug
+  output_dir: runs/openalex_ai_tiny_debug
+  cache_dir: cache/openalex_ai_tiny
 caching:
   tokenization_cache: true
   doc_embedding_cache: true
@@ -10,28 +10,28 @@ caching:
   encoder_cache: true
   neighbor_cache: true
 data:
-  documents: data/openalex_ai/documents.parquet
-  citations: data/openalex_ai/citations.parquet
-  baselines: data/openalex_ai/baselines.parquet
+  documents: data/openalex_ai_tiny/documents.parquet
+  citations: data/openalex_ai_tiny/citations.parquet
+  baselines: data/openalex_ai_tiny/baselines.parquet
   label_column: label
   source_col: source
   target_col: target
   split_strategy: time
   graph_mode: transductive
-  label_ratio: 0.35
+  label_ratio: 1.0
   test_size: 0.1
   val_size: 0.1
-  max_context_size: 4
+  max_context_size: 2
   sampling_strategy: local_relevance
   connectivity_weight: 0.45
   temporal_weight: 0.25
   reciprocity_weight: 0.1
   overlap_weight: 0.2
-  k_hops: 2
+  k_hops: 0
   cache_n_jobs: -1
   spectral_dim: 0
   enable_spectral: false
-  max_seq_length: 128
+  max_seq_length: 96
   max_authors: null
   cache_text: true
   pretokenize_context: true
@@ -56,17 +56,17 @@ model:
   citation_layers: 2
   citation_ff_dim: 512
   selector_hidden_dim: 256
-  selector_top_k: 4
+  selector_top_k: 2
   citation_dropout: 0.15
   fusion_modality_dropout: 0.15
   use_latent_graph: true
   latent_graph_top_k: 2
   hybrid_alpha_init: -2.0
 train:
-  batch_size: 48
-  num_workers: 6
+  batch_size: 16
+  num_workers: 2
   pretrain_epochs: 1
-  finetune_epochs: 6
+  finetune_epochs: 8
   seeds:
   - 42
   ablations:

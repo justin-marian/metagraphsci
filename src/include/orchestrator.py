@@ -3,13 +3,13 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 import numpy as np
 
-from metrics import multiclass_metrics, per_class_metrics, prediction_table
-from plotting import (
+from .metrics import multiclass_metrics, per_class_metrics, prediction_table
+from .plotting import (
     plot_calibration, plot_class_support,
     plot_confidence_histogram, plot_confusion,
     plot_embedding_projection, plot_per_class_f1,
     plot_pseudo_label_ratio, plot_training_history)
-from utils import ensure_dir, save_frame
+from .utils import ensure_dir, save_frame
 
 
 def evaluate_predictions(

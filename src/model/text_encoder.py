@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from transformers import AutoAdapterModel, BitsAndBytesConfig
+from adapters import AutoAdapterModel
+from transformers import BitsAndBytesConfig
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 
 
@@ -17,7 +18,7 @@ class TextEncoder(nn.Module):
         super().__init__()
         peft_mode = peft_mode.lower()
 
-        if model_name != "allenai/scibert":
+        if "scibert" not in model_name.lower():
             raise ValueError("This encoder is intended for SciBERT only.")
 
         # 4-bit Quantization (QLoRA)
@@ -42,7 +43,6 @@ class TextEncoder(nn.Module):
         self.backbone = AutoAdapterModel.from_pretrained(
             model_name, low_cpu_mem_usage=low_cpu_mem_usage,
             torch_dtype=torch_dtype, quantization_config=quantization_config)
-        self.backbone.load_adapter("allenai/scibert", source="hf", set_active=True)
         hidden_size = int(self.backbone.config.hidden_size)
 
         # Gradient Checkpointing

@@ -12,12 +12,16 @@ tunable structural and temporal weights.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
 import polars as pl
+from joblib import Parallel, delayed
+from loguru import logger
 from torch_geometric.utils import degree
 
 from .constants import (
@@ -32,10 +36,34 @@ from .constants import (
     TEMPORAL_DECAY_YEARS,
     EdgeType, GraphData, NeighborCache)
 from .graph_utils import (
-    build_local_context_map, edge_type,
+    build_local_context_map, build_undirected_neighbors, edge_type,
     k_hop_profile, overlap_score,
     reciprocity_value, spectral_features)
 from .tabular_utils import build_year_lookup
+
+
+def _resolve_n_jobs(n_jobs: int) -> int:
+    """Translate joblib-style n_jobs (-1 = all cores) into a concrete count."""
+    if n_jobs is None or n_jobs == 0:
+        return 1
+    if n_jobs < 0:
+        return max(1, (os.cpu_count() or 1) + 1 + n_jobs)
+    return n_jobs
+
+
+def _chunk_indices(n_items: int, n_chunks: int) -> list[tuple[int, int]]:
+    """Split [0, n_items) into n_chunks contiguous (start, stop) ranges."""
+    if n_items == 0 or n_chunks <= 1:
+        return [(0, n_items)]
+    n_chunks = min(n_chunks, n_items)
+    base, extra = divmod(n_items, n_chunks)
+    out: list[tuple[int, int]] = []
+    start = 0
+    for i in range(n_chunks):
+        stop = start + base + (1 if i < extra else 0)
+        out.append((start, stop))
+        start = stop
+    return out
 
 
 def missing_year(value: Any) -> bool:
@@ -118,7 +146,7 @@ def direct_neighbors(graph: GraphData, node_id: int) -> set[int]:
     Self-loops are excluded because scoring a node against itself is
     meaningless and pollutes the cache with useless entries.
     """
-    return graph.out_neighbors.get(node_id, set()) | graph.in_neighbors.get(node_id, set()) - {node_id}
+    return (graph.out_neighbors.get(node_id, set()) | graph.in_neighbors.get(node_id, set())) - {node_id}
 
 
 def top_k_scores(graph: GraphData, node_ids: list[int]) -> dict[int, dict[int, float]]:
@@ -136,11 +164,65 @@ def top_k_scores(graph: GraphData, node_ids: list[int]) -> dict[int, dict[int, f
     } for node_id in node_ids}
 
 
+def _score_chunk(
+    node_chunk: list[int],
+    in_map: dict[int, float], out_map: dict[int, float], max_degree: float,
+    local_contexts: dict[int, set[int]], year_lookup: dict[int, Any],
+    edge_set: set[tuple[int, int]],
+    weights: tuple[float, float, float, float],
+    hub_thr: int,
+) -> list[tuple[int, dict[int, float]]]:
+    """
+    Score a contiguous slice of center nodes. Top-level (picklable) so loky workers
+    can import it cleanly. Mirrors the inner body of local_relevance_func exactly,
+    in the same expression order, so float results are bit-identical to the serial path.
+    """
+    cw, tw, rw, ow = weights
+    decay = float(TEMPORAL_DECAY_YEARS)
+    out: list[tuple[int, dict[int, float]]] = []
+    for node_id in node_chunk:
+        if hub_thr > 0 and in_map[node_id] > hub_thr:
+            continue
+        candidates = local_contexts[node_id]
+        if not candidates:
+            continue
+        node_year = year_lookup[node_id]
+        scores: dict[int, float] = {}
+        node_ctx = local_contexts.get(node_id, set())
+        for neighbor_id in candidates:
+            if hub_thr > 0 and in_map[neighbor_id] > hub_thr:
+                continue
+            connectivity = (in_map[neighbor_id] + out_map[neighbor_id]) / max_degree
+            # Inline edge_type → reciprocity_value
+            has_in = (neighbor_id, node_id) in edge_set
+            has_out = (node_id, neighbor_id) in edge_set
+            recip = 1.0 if (has_in and has_out) else 0.0
+            # Inline overlap_score
+            ng_ctx = local_contexts.get(neighbor_id, set())
+            union = node_ctx | ng_ctx
+            overlap = len(node_ctx & ng_ctx) / len(union) if union else 0.0
+            # Inline time_similarity
+            ngy = year_lookup.get(neighbor_id, node_year)
+            if missing_year(node_year) or missing_year(ngy):
+                ts = 1.0
+            else:
+                ts = float(np.exp(-abs(int(node_year) - int(ngy)) / decay))
+            scores[neighbor_id] = (
+                cw * connectivity
+                + tw * ts
+                + rw * recip
+                + ow * overlap)
+        if scores:
+            out.append((node_id, scores))
+    return out
+
+
 def local_relevance_func(
     graph: GraphData, node_ids: Iterable[int], documents: pl.DataFrame,
     # Tune these to shift the relative importance of different signals in the final cache ranking.
     connectivity_weight: float, temporal_weight: float, reciprocity_weight: float, overlap_weight: float,
-    hub_degree_THR: int = HUB_DEGREE_THR) -> dict[int, dict[int, float]]:
+    hub_degree_threshold: int = HUB_DEGREE_THR,
+    *, n_jobs: int = -1) -> dict[int, dict[int, float]]:
     """
     Score candidate citations with a compact structural–temporal relevance model.
     The score for each (center, neighbor) pair is a weighted sum of four terms:
@@ -162,37 +244,37 @@ def local_relevance_func(
     year_lookup    = build_year_lookup(documents)
     local_contexts = build_local_context_map(graph)
     in_map, out_map, max_degree = node_degree_maps(graph)
+    edge_set = graph.edge_set
+    weights = (connectivity_weight, temporal_weight, reciprocity_weight, overlap_weight)
+
+    node_list = [int(n) for n in node_ids]
+    workers = _resolve_n_jobs(n_jobs)
+
+    # n_jobs=1 path: skip joblib overhead and keep a clean serial baseline used
+    # for hash validation. The chunked worker is a pure superset, so this path
+    # produces bit-identical output to the parallel path.
+    if workers == 1 or len(node_list) <= 1:
+        chunks_results = [_score_chunk(node_list, in_map, out_map, max_degree,
+                                        local_contexts, year_lookup, edge_set,
+                                        weights, hub_degree_threshold)]
+    else:
+        logger.info("Building neighbor cache scores with n_jobs={} over {} nodes (parallel)",
+                    workers, len(node_list))
+        ranges = _chunk_indices(len(node_list), workers)
+        chunks_results = Parallel(n_jobs=workers, backend="loky", verbose=0)(
+            delayed(_score_chunk)(
+                node_list[start:stop],
+                in_map, out_map, max_degree, local_contexts, year_lookup, edge_set,
+                weights, hub_degree_threshold)
+            for start, stop in ranges)
+
+    # Reassemble in original node_list order: chunks already cover node_list
+    # contiguously and Parallel preserves submission order, so concatenation
+    # yields the same insertion sequence as the serial loop.
     relevance: dict[int, dict[int, float]] = {}
-
-    for node_id in map(int, node_ids):
-        # Skip hub nodes entirely when the threshold is active.
-        if hub_degree_THR > 0 and in_map[node_id] > hub_degree_THR:
-            continue
-
-        candidates = local_contexts[node_id]
-        if not candidates:
-            continue
-
-        node_year = year_lookup[node_id]
-        scores: dict[int, float] = {}
-
-        for neighbor_id in candidates:
-            # Skip hub neighbours for the same reason as hub center nodes.
-            if hub_degree_THR > 0 and in_map[neighbor_id] > hub_degree_THR:
-                continue
-
-            # Connectivity is the sum of in- and out-degree normalised by the
-            # maximum degree in the graph so scores are comparable across graphs with different edge densities.
-            connectivity = in_map[neighbor_id] + out_map[neighbor_id] / max_degree
-            scores[neighbor_id] = (
-                connectivity_weight  * connectivity
-                + temporal_weight    * time_similarity(node_year, year_lookup[neighbor_id])
-                + reciprocity_weight * reciprocity_value(edge_type(graph, node_id, neighbor_id))
-                + overlap_weight     * overlap_score(local_contexts, node_id, neighbor_id))
-
-        if scores:
+    for chunk in chunks_results:
+        for node_id, scores in chunk:
             relevance[node_id] = scores
-
     return relevance
 
 
@@ -209,7 +291,8 @@ def build_relevance_scores(
     # Structural feature options (ignored when k hops are 0 or spectral dim is 0 or not enabled). 
     # These do not affect the relevance scores themselves but are included here to avoid redundant 
     # graph traversals when both scores and features are needed for cache entries.
-    hub_degree_THR: int
+    hub_degree_threshold: int,
+    *, n_jobs: int = -1,
 ) -> dict[int, dict[int, float]]:
     """Dispatch to the configured neighbour-scoring strategy.
 
@@ -230,12 +313,92 @@ def build_relevance_scores(
             reciprocity_weight=reciprocity_weight,
             overlap_weight=overlap_weight,
             # Structural feature options (ignored when k hops are 0 or spectral dim is 0 or not enabled).
-            hub_degree_THR=hub_degree_THR)
+            hub_degree_threshold=hub_degree_threshold,
+            n_jobs=n_jobs)
 
     if strategy == "top_k":
         return top_k_scores(graph, node_ids)
 
     raise ValueError(f"Unknown sampling strategy: {strategy!r}")
+
+
+def _hop_chunk(
+    node_chunk: list[int], undirected: dict[int, set[int]], max_hops: int
+) -> list[tuple[int, list[float]]]:
+    """Compute BFS hop profiles for a slice of nodes using a precomputed undirected map."""
+    out: list[tuple[int, list[float]]] = []
+    for node_id in node_chunk:
+        if max_hops <= 0 or node_id not in undirected:
+            out.append((node_id, []))
+            continue
+        visited = {node_id}
+        frontier = {node_id}
+        counts = [0.0] * max_hops
+        for hop in range(max_hops):
+            next_frontier = set().union(*(undirected.get(n, set()) for n in frontier)) - visited
+            counts[hop] = float(len(next_frontier))
+            if not next_frontier:
+                break
+            visited |= next_frontier
+            frontier = next_frontier
+        total = sum(counts)
+        out.append((node_id, [c / total for c in counts] if total > 0 else counts))
+    return out
+
+
+def _assemble_chunk(
+    node_chunk: list[int],
+    relevance_scores: dict[int, dict[int, float]],
+    edge_set: set[tuple[int, int]],
+    year_lookup: dict[int, Any],
+    hop_lookup: dict[int, list[float]],
+    spectral_lookup: dict[int, list[float]],
+    valid_ids: set[int],
+    max_context_size: int,
+) -> list[tuple[int, list[dict[str, Any]]]]:
+    """
+    Build cache entry lists for a slice of center nodes. Mirrors the serial
+    assembly loop body exactly so output is bit-identical.
+    """
+    out: list[tuple[int, list[dict[str, Any]]]] = []
+    for node_id in node_chunk:
+        scored = {
+            neighbor_id: score
+            for neighbor_id, score in relevance_scores.get(node_id, {}).items()
+            if neighbor_id in valid_ids and neighbor_id != node_id
+        }
+        if not scored:
+            continue
+        ranked = sorted(scored.items(), key=lambda item: item[1], reverse=True)
+        node_year = year_lookup.get(node_id)
+        entries: list[dict[str, Any]] = []
+        for neighbor_id, score in ranked[:max_context_size]:
+            # Inline edge_type
+            has_in = (neighbor_id, node_id) in edge_set
+            has_out = (node_id, neighbor_id) in edge_set
+            if has_in and has_out:
+                etype = int(EdgeType.BIDIRECTIONAL)
+            elif has_in:
+                etype = int(EdgeType.IN)
+            elif has_out:
+                etype = int(EdgeType.OUT)
+            else:
+                etype = int(EdgeType.NONE)
+            ny = year_lookup.get(neighbor_id)
+            yd = 0.0 if (missing_year(node_year) or missing_year(ny)) else float(int(ny) - int(node_year))
+            entry: dict[str, Any] = {
+                "doc_id":     int(neighbor_id),
+                "edge_type":  etype,
+                "year_delta": yd,
+                "score":      float(score),
+            }
+            if hop_profile := hop_lookup.get(neighbor_id):
+                entry["hop_profile"] = hop_profile
+            if spectral := spectral_lookup.get(neighbor_id):
+                entry["spectral"] = spectral
+            entries.append(entry)
+        out.append((node_id, entries))
+    return out
 
 
 def neighbor_entry(
@@ -278,9 +441,12 @@ def build_neighbor_cache(
     enable_spectral: bool = False,
     k_hops: int = K_HOPS,
     spectral_dim: int = SPECTRAL_DIM,
-    hub_degree_THR: int = HUB_DEGREE_THR,
+    hub_degree_threshold: int = HUB_DEGREE_THR,
     # Safety cap for BFS traversal
-    max_graph_nodes_for_hops: int = MAX_GRAPH_NODES_FOR_HOPS
+    max_graph_nodes_for_hops: int = MAX_GRAPH_NODES_FOR_HOPS,
+    # Parallelism for the CPU-bound build (-1 = all cores). Output is bit-identical
+    # across n_jobs settings; verified via the sha256 line logged at the end.
+    n_jobs: int = -1,
 ) -> NeighborCache:
     """
     Materialise the reusable ego-context cache consumed during training.
@@ -310,11 +476,15 @@ def build_neighbor_cache(
     k_hops                      : BFS depth for hop-profile feature (0 = disabled, no BFS, no hop features).
     spectral_dim                : Laplacian eigenvector dimension (0 = disabled, no spectral features).
     enable_spectral             : Must be True AND spectral_dim > 0 to compute and include spectral features.
-    hub_degree_THR        : Exclude nodes with in-degree > this (0 = off, no hub filtering).
+    hub_degree_threshold        : Exclude nodes with in-degree > this (0 = off, no hub filtering).
     """
     node_list = [int(node_id) for node_id in node_ids]
     # Restrict valid neighbours to the provided set; default to all center nodes.
     valid_ids = {int(nid) for nid in valid_node_ids} if valid_node_ids is not None else set(node_list)
+    workers = _resolve_n_jobs(n_jobs)
+    logger.info("Building neighbor cache with n_jobs={} over {} nodes (parallel)",
+                workers, len(node_list))
+
     relevance_scores = build_relevance_scores(
         graph=graph, node_ids=node_list, documents=documents,
         sampling_strategy=sampling_strategy,
@@ -324,38 +494,58 @@ def build_neighbor_cache(
         reciprocity_weight=reciprocity_weight,
         overlap_weight=overlap_weight,
         # Structural feature options (ignored when k hops are 0 or spectral dim is 0 or not enabled).
-        hub_degree_THR=hub_degree_THR)
+        hub_degree_threshold=hub_degree_threshold,
+        n_jobs=n_jobs)
 
     year_lookup     = build_year_lookup(documents)
     spectral_lookup = spectral_features(graph, node_list, spectral_dim=spectral_dim, enabled=enable_spectral)
 
     # BFS hop profiles are only computed when the graph is small enough to make
     # the traversal tractable. Oversized graphs simply produce no hop entries.
-    hop_lookup: dict[int, list[float]] = (
-        {node_id: k_hop_profile(graph, node_id, max_hops=k_hops) for node_id in node_list}
-        if k_hops > 0 and len(node_list) <= max_graph_nodes_for_hops else {})
+    hop_lookup: dict[int, list[float]] = {}
+    if k_hops > 0 and len(node_list) <= max_graph_nodes_for_hops:
+        # Hoist the undirected adjacency once instead of rebuilding it per call
+        # inside k_hop_profile (the legacy serial code did the latter).
+        undirected = build_undirected_neighbors(graph)
+        if workers == 1 or len(node_list) <= 1:
+            hop_results = [_hop_chunk(node_list, undirected, k_hops)]
+        else:
+            logger.info("Computing {}-hop profiles with n_jobs={} over {} nodes",
+                        k_hops, workers, len(node_list))
+            ranges = _chunk_indices(len(node_list), workers)
+            hop_results = Parallel(n_jobs=workers, backend="loky", verbose=0)(
+                delayed(_hop_chunk)(node_list[s:e], undirected, k_hops) for s, e in ranges)
+        for chunk in hop_results:
+            for nid, profile in chunk:
+                hop_lookup[nid] = profile
+
+    edge_set = graph.edge_set
+    if workers == 1 or len(node_list) <= 1:
+        assembly_results = [_assemble_chunk(
+            node_list, relevance_scores, edge_set, year_lookup, hop_lookup,
+            spectral_lookup, valid_ids, max_context_size)]
+    else:
+        logger.info("Assembling cache entries with n_jobs={} over {} nodes",
+                    workers, len(node_list))
+        ranges = _chunk_indices(len(node_list), workers)
+        assembly_results = Parallel(n_jobs=workers, backend="loky", verbose=0)(
+            delayed(_assemble_chunk)(
+                node_list[s:e], relevance_scores, edge_set, year_lookup,
+                hop_lookup, spectral_lookup, valid_ids, max_context_size)
+            for s, e in ranges)
 
     cache: NeighborCache = {}
-    for node_id in node_list:
-        # Filter to valid neighbours; exclude the center node from its own list.
-        scored = {
-            neighbor_id: score
-            for neighbor_id, score in relevance_scores[node_id].items()
-            if neighbor_id in valid_ids and neighbor_id != node_id
-        }
+    for chunk in assembly_results:
+        for node_id, entries in chunk:
+            cache[node_id] = entries
 
-        if not scored:
-            # No valid scored neighbours omit this node rather than producing
-            # a cache entry with fabricated zero-signal content.
-            continue
-
-        # Sort descending by score and keep only the top max_context_size entries.
-        ranked = sorted(scored.items(), key=lambda item: item[1], reverse=True)
-        cache[node_id] = [neighbor_entry(
-            graph=graph, node_id=node_id, neighbor_id=neighbor_id, score=score, 
-            year_lookup=year_lookup, hop_lookup=hop_lookup, spectral_lookup=spectral_lookup)
-        for neighbor_id, score in ranked[:max_context_size]]
-
+    # Determinism check: hash a key-sorted JSON view so the digest is invariant
+    # to insertion order. Must match between serial (n_jobs=1) and parallel runs.
+    digest_payload = json.dumps(
+        {str(k): cache[k] for k in sorted(cache)},
+        sort_keys=True, separators=(",", ":"))
+    logger.info("Neighbor cache built: {} entries, sha256={}",
+                len(cache), hashlib.sha256(digest_payload.encode()).hexdigest())
     return cache
 
 

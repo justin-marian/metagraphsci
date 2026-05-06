@@ -42,6 +42,11 @@ class NeighborhoodAwareContrastiveLoss(nn.Module):
         # This produces the dense similarity table used for both positive
         # matching and negative aggregation.
         logits = (anchor @ positive.transpose(0, 1)) / self.temperature
+
+        # Numerical stability: subtract per-row max before exp. The shift cancels
+        # between numerator and denominator of the InfoNCE ratio, so the loss is
+        # mathematically unchanged but exp() stays bounded under bf16/fp16 autocast.
+        logits = logits - logits.max(dim=1, keepdim=True).values.detach()
         exp_logits = torch.exp(logits)
 
         batch_size = logits.size(0)
@@ -87,7 +92,15 @@ class NeighborhoodAwareContrastiveLoss(nn.Module):
         if positive_mask is None:
             positive_values = exp_logits.diagonal()
         else:
-            pos_weights = positive_mask.to(device=device, dtype=torch.float32)
+            # Anchor and positive are augmentations of the same doc, so the diagonal
+            # is always a valid SimCLR-style positive. Fall back to it for any row
+            # whose topology/metadata mask is empty — otherwise (exp * 0).sum() = 0
+            # propagates as -log(0) = +inf and poisons the gradient with NaN.
+            pos_mask = positive_mask.to(device=device, dtype=torch.bool).clone()
+            empty_rows = ~pos_mask.any(dim=1)
+            if empty_rows.any():
+                pos_mask[empty_rows, torch.arange(batch_size, device=device)[empty_rows]] = True
+            pos_weights = pos_mask.to(dtype=torch.float32)
             positive_values = ((exp_logits * pos_weights).sum(dim=1) / pos_weights.sum(dim=1).clamp_min(1.0))
 
         # Weighted InfoNCE Denominator
@@ -96,5 +109,9 @@ class NeighborhoodAwareContrastiveLoss(nn.Module):
         # pressure for semantically related scholarly documents.
         negative_values = (exp_logits * negative_weights).sum(dim=1)
 
-        loss = -torch.log(positive_values / (positive_values + negative_values + self.eps))
+        # Guard against log(0) when positive_values is near-zero.
+        # The old formula -log(pos / (pos + neg + eps)) still computes log(0)
+        # when pos - 0 (e.g. early training with very low cosine similarity).
+        # Adding eps to the numerator prevents +inf loss / NaN gradients.
+        loss = -torch.log((positive_values + self.eps) / (positive_values + negative_values + self.eps))
         return loss.mean()

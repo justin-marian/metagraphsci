@@ -89,7 +89,8 @@ class MultiScaleDocumentDataset(Dataset):
         cache_text:         bool = True,
         pretokenize_context: bool = False,
         hop_profile_dim:    int = 2,
-        spectral_dim:       int = 0) -> None:
+        spectral_dim:       int = 0,
+        pretokenized:       dict[int, dict[str, Tensor]] | None = None) -> None:
         """Initialise lookup structures and optional in-memory token caches.
 
         Parameters
@@ -149,7 +150,10 @@ class MultiScaleDocumentDataset(Dataset):
             int(row["doc_id"]): row
             for row in self.context_documents.iter_rows(named=True)
         }
-        self.text_cache: dict[int, dict[str, Tensor]] = {}
+        # Seed text cache from a precomputed disk-backed tokenisation when available.
+        # The dataset still owns this dict so on-the-fly tokenisations for newly
+        # encountered docs can be added without touching the shared lookup.
+        self.text_cache: dict[int, dict[str, Tensor]] = dict(pretokenized) if pretokenized else {}
         # A pre-built zero-tensor pair reused for all padding slots, avoiding
         # repeated zero tensor allocations inside the hot __getitem__ path.
         self.empty_text = self.build_empty_neighbor_text()
@@ -246,15 +250,27 @@ class MultiScaleDocumentDataset(Dataset):
         from the row so missing values are treated as a consistent category rather than crashing with a KeyError.
         """
         authors = row["authors"]
-        # Guard against non-list encodings that may arrive from older CSV rows.
-        authors = authors[:self.max_authors] if isinstance(authors, list) else []
-        author_ids = [self.author_encoder[author] for author in authors]
+        if hasattr(authors, "to_list"):
+            authors = authors.to_list()
+        if not isinstance(authors, list):
+            authors = []
+        # Flatten if elements themselves are Series/lists (nested polars structures)
+        flat = []
+        for a in authors:
+            if hasattr(a, "to_list"):
+                flat.extend(a.to_list())
+            elif isinstance(a, list):
+                flat.extend(a)
+            elif a is not None:
+                flat.append(str(a))
+        authors = flat[:self.max_authors]
+        author_ids = [self.author_encoder.get(author, 0) for author in authors]
         # Pad the author list to a fixed length with 0 (the unknown/padding index).
         author_ids.extend([0] * max(0, self.max_authors - len(author_ids)))
 
         return {
-            "venue_ids":     torch.tensor(self.venue_encoder[str(row.get("venue", UNKNOWN_TOKEN))], dtype=torch.long),
-            "publisher_ids": torch.tensor(self.publisher_encoder[(str(row.get("publisher", UNKNOWN_TOKEN)))], dtype=torch.long),
+            "venue_ids":     torch.tensor(self.venue_encoder.get(str(row.get("venue", UNKNOWN_TOKEN)), 0), dtype=torch.long),
+            "publisher_ids": torch.tensor(self.publisher_encoder.get((str(row.get("publisher", UNKNOWN_TOKEN))), 0), dtype=torch.long),
             "author_ids":    torch.tensor(author_ids[:self.max_authors], dtype=torch.long),
             "years":         torch.tensor([self.normalize_year(self.parse_year(row.get("year")))], dtype=torch.float32)
         }
@@ -282,8 +298,8 @@ class MultiScaleDocumentDataset(Dataset):
         result: dict[str, Any] = {
             "text":         self.tokenized_text(neighbor_id, str(neighbor_row["title"]), str(neighbor_row["abstract"])),
             "edge_type":    int(entry.get("edge_type", int(EdgeType.NONE))),
-            "venue_id":     self.venue_encoder[str(neighbor_row.get("venue", UNKNOWN_TOKEN))],
-            "publisher_id": self.publisher_encoder[str(neighbor_row.get("publisher", UNKNOWN_TOKEN))],
+            "venue_id":     self.venue_encoder.get(str(neighbor_row.get("venue", UNKNOWN_TOKEN)), 0),
+            "publisher_id": self.publisher_encoder.get(str(neighbor_row.get("publisher", UNKNOWN_TOKEN)), 0),
             "year":         self.normalize_year(neighbor_year),
             "year_delta":   (neighbor_year - center_year) / YEAR_SCALE,
             "score":        float(entry["score"])
