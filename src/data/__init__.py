@@ -43,13 +43,14 @@ from .graph_cache import (
     build_graph_cache, compute_graph_metadata, graph_is_compatible,
     load_graph_cache, save_graph_cache)
 from .graph_utils import load_citation_graph, split_graphs
+from .neighbor_embedding_cache import NeighborEmbeddingCache
 from .tabular_utils import create_encoders, create_low_label_split, load_documents, prepare_documents, split_documents
 from .tokenization_cache import (
     build_tokenization_cache, compute_tokenization_metadata,
     load_tokenization_cache, save_tokenization_cache, tokenization_is_compatible)
 
 __all__ = [
-    "MultiScaleDocumentDataset", "NeighborCache",
+    "MultiScaleDocumentDataset", "NeighborCache", "NeighborEmbeddingCache",
     "build_embedding_cache", "build_encoder_cache", "build_graph_cache",
     "build_loader", "build_neighbor_cache", "build_tokenization_cache",
     "cache_root", "caching_enabled",

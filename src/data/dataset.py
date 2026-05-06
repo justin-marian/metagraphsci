@@ -90,7 +90,8 @@ class MultiScaleDocumentDataset(Dataset):
         pretokenize_context: bool = False,
         hop_profile_dim:    int = 2,
         spectral_dim:       int = 0,
-        pretokenized:       dict[int, dict[str, Tensor]] | None = None) -> None:
+        pretokenized:       dict[int, dict[str, Tensor]] | None = None,
+        context_max_seq_length: int | None = None) -> None:
         """Initialise lookup structures and optional in-memory token caches.
 
         Parameters
@@ -138,6 +139,8 @@ class MultiScaleDocumentDataset(Dataset):
         self.publisher_encoder  = publisher_encoder
         self.author_encoder     = author_encoder
         self.max_seq_length     = int(max_seq_length)
+        # S2: context tokens use a smaller seq length (default = max_seq_length).
+        self.context_max_seq_length = int(context_max_seq_length) if context_max_seq_length is not None else int(max_seq_length)
         self.max_context_size   = int(max_context_size)
         self.max_authors        = int(max_authors)
         self.hop_profile_dim    = int(hop_profile_dim)
@@ -153,7 +156,11 @@ class MultiScaleDocumentDataset(Dataset):
         # Seed text cache from a precomputed disk-backed tokenisation when available.
         # The dataset still owns this dict so on-the-fly tokenisations for newly
         # encountered docs can be added without touching the shared lookup.
+        # The pretokenized cache is at max_seq_length and is used for the anchor.
         self.text_cache: dict[int, dict[str, Tensor]] = dict(pretokenized) if pretokenized else {}
+        # Context tokens may use a different seq length (S2), so they keep a
+        # separate cache to avoid mixing shapes.
+        self.context_text_cache: dict[int, dict[str, Tensor]] = {}
         # A pre-built zero-tensor pair reused for all padding slots, avoiding
         # repeated zero tensor allocations inside the hot __getitem__ path.
         self.empty_text = self.build_empty_neighbor_text()
@@ -174,7 +181,8 @@ class MultiScaleDocumentDataset(Dataset):
         higher memory usage proportional to the number of context documents times max_seq_length.
         """
         for doc_id, row in self.doc_lookup.items():
-            self.text_cache[doc_id] = self.tokenize_text(str(row.get("title", "")), str(row.get("abstract", "")))
+            self.context_text_cache[doc_id] = self.tokenize_context_text(
+                str(row.get("title", "")), str(row.get("abstract", "")))
 
     def tokenize_text(self, title: str, abstract: str) -> dict[str, Tensor]:
         """
@@ -207,6 +215,25 @@ class MultiScaleDocumentDataset(Dataset):
             self.text_cache[doc_id] = tokenized
         return tokenized
 
+    def tokenize_context_text(self, title: str, abstract: str) -> dict[str, Tensor]:
+        """Tokenise a context neighbour at the smaller context_max_seq_length (S2)."""
+        encoded = self.tokenizer(
+            title, abstract,
+            max_length=self.context_max_seq_length, padding="max_length",
+            truncation=True, return_tensors="pt")
+        return {
+            "input_ids":      encoded["input_ids"].squeeze(0),
+            "attention_mask": encoded["attention_mask"].squeeze(0)
+        }
+
+    def tokenized_context_text(self, doc_id: int, title: str, abstract: str) -> dict[str, Tensor]:
+        if self.cache_text and doc_id in self.context_text_cache:
+            return self.context_text_cache[doc_id]
+        tokenized = self.tokenize_context_text(title, abstract)
+        if self.cache_text:
+            self.context_text_cache[doc_id] = tokenized
+        return tokenized
+
     def build_empty_neighbor_text(self) -> dict[str, Tensor]:
         """
         Create the reusable zero-tensor pair used for all padded neighbour slots.
@@ -216,8 +243,8 @@ class MultiScaleDocumentDataset(Dataset):
         references to it is cheap.
         """
         return {
-            "input_ids":      torch.zeros(self.max_seq_length, dtype=torch.long),
-            "attention_mask": torch.zeros(self.max_seq_length, dtype=torch.long)
+            "input_ids":      torch.zeros(self.context_max_seq_length, dtype=torch.long),
+            "attention_mask": torch.zeros(self.context_max_seq_length, dtype=torch.long)
         }
 
     def parse_year(self, value: Any, default: float = float(YEAR)) -> float:
@@ -296,7 +323,8 @@ class MultiScaleDocumentDataset(Dataset):
         neighbor_year = self.parse_year(neighbor_row["year"], default=center_year)
 
         result: dict[str, Any] = {
-            "text":         self.tokenized_text(neighbor_id, str(neighbor_row["title"]), str(neighbor_row["abstract"])),
+            "text":         self.tokenized_context_text(neighbor_id, str(neighbor_row["title"]), str(neighbor_row["abstract"])),
+            "doc_id":       neighbor_id,
             "edge_type":    int(entry.get("edge_type", int(EdgeType.NONE))),
             "venue_id":     self.venue_encoder.get(str(neighbor_row.get("venue", UNKNOWN_TOKEN)), 0),
             "publisher_id": self.publisher_encoder.get(str(neighbor_row.get("publisher", UNKNOWN_TOKEN)), 0),
@@ -356,6 +384,7 @@ class MultiScaleDocumentDataset(Dataset):
 
         # Accumulate neighbour tensors in parallel lists before stacking.
         neighbors:      list[dict[str, Tensor]] = []
+        neighbor_ids:   list[int]   = []
         edge_types:     list[int]   = []
         year_deltas:    list[float] = []
         scores:         list[float] = []
@@ -374,6 +403,7 @@ class MultiScaleDocumentDataset(Dataset):
             # so read them first and skip the rest of the entry when the neighbour 
             # document is missing from this split.
             neighbors.append(tensors["text"])
+            neighbor_ids.append(int(tensors["doc_id"]))
             edge_types.append(tensors["edge_type"])
             year_deltas.append(tensors["year_delta"])
             scores.append(tensors["score"])
@@ -392,6 +422,7 @@ class MultiScaleDocumentDataset(Dataset):
 
         # Pad all lists to max_context_size so the final tensors have a fixed shape.
         neighbors     += [self.empty_text] * pad_count
+        neighbor_ids  += [0] * pad_count
         edge_types    += [int(EdgeType.NONE)] * pad_count
         year_deltas   += [0.0] * pad_count
         scores        += [0.0] * pad_count
@@ -406,6 +437,9 @@ class MultiScaleDocumentDataset(Dataset):
         # Stack neighbour text tensors along the context axis.
         item["context_input_ids"]      = torch.stack([n["input_ids"]      for n in neighbors])
         item["context_attention_mask"] = torch.stack([n["attention_mask"] for n in neighbors])
+        # S1: doc-id list per neighbour so the model can serve embeddings
+        # from a per-epoch cache instead of re-encoding every batch.
+        item["context_doc_ids"]        = torch.tensor(neighbor_ids, dtype=torch.long)
 
         # Binary mask: 1 for real neighbours, 0 for padding slots.
         item["context_mask"]          = torch.tensor([1] * valid_count + [0] * pad_count, dtype=torch.long)
@@ -430,7 +464,9 @@ class MultiScaleDocumentDataset(Dataset):
         return item
 
 
-def build_loader(dataset: Dataset, batch_size: int, shuffle: bool, num_workers: int = 1) -> DataLoader:
+def build_loader(
+    dataset: Dataset, batch_size: int, shuffle: bool, num_workers: int = 1,
+    sampler: Any = None) -> DataLoader:
     """
     Pinned memory is only enabled when a CUDA device is available, it has no
     effect on CPU-only machines and wastes RAM there.  Worker persistence and
@@ -442,10 +478,13 @@ def build_loader(dataset: Dataset, batch_size: int, shuffle: bool, num_workers: 
     kwargs: dict[str, Any] = {
         "dataset":     dataset,
         "batch_size":  batch_size,
-        "shuffle":     shuffle,
         "num_workers": num_workers,
         "pin_memory":  torch.cuda.is_available()
     }
+    if sampler is not None:
+        kwargs["sampler"] = sampler
+    else:
+        kwargs["shuffle"] = shuffle
     if num_workers > 0:
         kwargs |= {"persistent_workers": True, "prefetch_factor": DATALOADER_PREFETCH_FACTOR}
     return DataLoader(**kwargs)

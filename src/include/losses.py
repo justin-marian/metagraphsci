@@ -4,6 +4,53 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
+class FocalLoss(nn.Module):
+    """Multi-class focal loss with optional class-weight (alpha) and label smoothing.
+
+    L = -alpha_t * (1 - p_t)^gamma * log(p_t)
+    """
+
+    def __init__(
+        self, gamma: float = 2.0, alpha: Tensor | None = None,
+        label_smoothing: float = 0.0, reduction: str = "mean") -> None:
+        super().__init__()
+        self.gamma = float(gamma)
+        self.label_smoothing = float(label_smoothing)
+        self.reduction = reduction
+        if alpha is not None:
+            self.register_buffer("alpha", alpha.float())
+        else:
+            self.alpha = None
+
+    def forward(self, logits: Tensor, targets: Tensor) -> Tensor:
+        log_probs = F.log_softmax(logits, dim=-1)
+        probs = log_probs.exp()
+        num_classes = logits.size(-1)
+
+        if self.label_smoothing > 0.0:
+            with torch.no_grad():
+                true_dist = torch.full_like(log_probs, self.label_smoothing / max(num_classes - 1, 1))
+                true_dist.scatter_(1, targets.unsqueeze(1), 1.0 - self.label_smoothing)
+            ce = -(true_dist * log_probs).sum(dim=-1)
+            pt = probs.gather(1, targets.unsqueeze(1)).squeeze(1).clamp(min=1e-8, max=1.0)
+        else:
+            ce = F.nll_loss(log_probs, targets, reduction="none")
+            pt = probs.gather(1, targets.unsqueeze(1)).squeeze(1).clamp(min=1e-8, max=1.0)
+
+        focal_factor = (1.0 - pt) ** self.gamma
+        loss = focal_factor * ce
+
+        if self.alpha is not None:
+            alpha_t = self.alpha.to(logits.device).gather(0, targets)
+            loss = alpha_t * loss
+
+        if self.reduction == "mean":
+            return loss.mean()
+        if self.reduction == "sum":
+            return loss.sum()
+        return loss
+
+
 class NeighborhoodAwareContrastiveLoss(nn.Module):
     """
     MCNA contrastive loss with neighborhood masking and metadata-aware downweighting.

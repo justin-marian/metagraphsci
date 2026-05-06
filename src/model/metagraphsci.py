@@ -64,6 +64,10 @@ class MetaGraphSci(nn.Module):
         self.fusion = MultimodalFusion(text_dim, metadata_dim, citation_dim, fusion_dim, fusion_modality_dropout)
         self.classifier = NormalizedCosineClassifier(fusion_dim, num_classes, classifier_scale)
 
+        # S1: when set, context neighbour embeddings are served via lookup
+        # instead of re-encoding context_input_ids through the text encoder.
+        self.context_embedding_cache: object | None = None
+
     def ablation_study(self, h_text: Tensor, h_meta: Tensor, h_citation: Tensor, mode: str) -> TensorTriplet:
         """Dynamically disables specific modalities based on the requested ablation mode."""
         # DESIGN DECISION: Zero-Masked Ablation
@@ -82,15 +86,22 @@ class MetaGraphSci(nn.Module):
         context_mask: Tensor, context_edge_types: Tensor, context_year_deltas: Tensor, context_scores: Tensor,
         context_hop_profiles: Tensor | None = None, context_spectral: Tensor | None = None,
         context_venue_ids: Tensor | None = None, context_publisher_ids: Tensor | None = None,
-        context_years: Tensor | None = None, ablation_mode: str | None = None) -> TensorTriplet:
+        context_years: Tensor | None = None, context_doc_ids: Tensor | None = None,
+        ablation_mode: str | None = None) -> TensorTriplet:
         """Executes the specialized encoders and prepares the representations for fusion."""
-        
+
         # 1. Base Document Representations
         h_text = self.text_encoder(input_ids, attention_mask)
         h_meta = self.metadata_encoder(venue_ids, publisher_ids, author_ids, years)
-        
+
         # 2. Graph Context Textual Encoding (Batched)
-        candidate_embeddings = self.citation_encoder.encode_candidates(context_input_ids, context_attention_mask, self.text_encoder)
+        # S1: prefer the per-epoch neighbour embedding cache when available.
+        # Anchor still flows through the live encoder above for gradient flow.
+        if self.context_embedding_cache is not None and context_doc_ids is not None:
+            candidate_embeddings = self.context_embedding_cache.lookup(context_doc_ids)
+        else:
+            candidate_embeddings = self.citation_encoder.encode_candidates(
+                context_input_ids, context_attention_mask, self.text_encoder)
 
         # 3. Graph Context Metadata Encoding
         context_meta = None
@@ -122,16 +133,18 @@ class MetaGraphSci(nn.Module):
         context_mask: Tensor, context_edge_types: Tensor, context_year_deltas: Tensor, context_scores: Tensor,
         context_hop_profiles: Tensor | None = None, context_spectral: Tensor | None = None,
         context_venue_ids: Tensor | None = None, context_publisher_ids: Tensor | None = None,
-        context_years: Tensor | None = None, ablation_mode: str | None = None, return_parts: bool = False,
+        context_years: Tensor | None = None, context_doc_ids: Tensor | None = None,
+        ablation_mode: str | None = None, return_parts: bool = False,
     ) -> tuple[Tensor, Tensor, Tensor] | tuple[Tensor, Tensor, Tensor, dict[str, Tensor]]:
         """Executes the full forward pass returning fused embeddings, hypersphere logits, and probabilities."""
         
         h_text, h_meta, h_citation = self.encode_modalities(
             input_ids, attention_mask, venue_ids, publisher_ids, author_ids, years,
             context_input_ids, context_attention_mask, context_mask, context_edge_types, 
-            context_year_deltas, context_scores, context_hop_profiles=context_hop_profiles, 
-            context_spectral=context_spectral, context_venue_ids=context_venue_ids, 
-            context_publisher_ids=context_publisher_ids, context_years=context_years, 
+            context_year_deltas, context_scores, context_hop_profiles=context_hop_profiles,
+            context_spectral=context_spectral, context_venue_ids=context_venue_ids,
+            context_publisher_ids=context_publisher_ids, context_years=context_years,
+            context_doc_ids=context_doc_ids,
             ablation_mode=ablation_mode)
 
         embeddings = self.fusion(h_text, h_meta, h_citation)

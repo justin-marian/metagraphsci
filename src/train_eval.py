@@ -18,7 +18,7 @@ from loguru import logger
 from tqdm.auto import tqdm
 
 from .include import (
-    NeighborhoodAwareContrastiveLoss, PseudoLabeler,
+    FocalLoss, NeighborhoodAwareContrastiveLoss, PseudoLabeler,
     evaluate_predictions, plot_training_history,
     save_evaluation_bundle, save_frame,
     setup_global_logger, to_frame)
@@ -84,6 +84,10 @@ class MetaGraphSciTrainerEval:
         # NormalizedCosineClassifier because the cosine logits are inherently
         # bounded [-scale, +scale] and can cause overconfident CE gradients.
         "label_smoothing": 0.1,
+
+        # S3: focal loss for tail-class learning under heavy class imbalance.
+        "use_focal_loss": True,
+        "focal_gamma": 2.0,
     }
 
     def __init__(
@@ -123,8 +127,16 @@ class MetaGraphSciTrainerEval:
 
         # HYPERPARAMETER IMPROVEMENT: label_smoothing=0.1 reduces overconfidence
         # that is otherwise amplified by the cosine classifier's scale factor.
-        self.supervised_loss = nn.CrossEntropyLoss(
-            label_smoothing=float(self.cfg.get("label_smoothing", 0.1)))
+        smoothing = float(self.cfg.get("label_smoothing", 0.1))
+        self.supervised_loss = nn.CrossEntropyLoss(label_smoothing=smoothing)
+        # S3: focal loss is applied only to ground-truth labeled batches.
+        # Pseudo-label loss continues to use vanilla CE (self.supervised_loss).
+        if bool(self.cfg.get("use_focal_loss", True)):
+            self.gt_loss = FocalLoss(
+                gamma=float(self.cfg.get("focal_gamma", 2.0)),
+                label_smoothing=smoothing)
+        else:
+            self.gt_loss = self.supervised_loss
 
         self.pseudo_labeler = PseudoLabeler(
             target_prior=labeled_class_prior, **pseudo_cfg_for_init)
@@ -132,6 +144,20 @@ class MetaGraphSciTrainerEval:
         self.history: list[dict[str, float | int | str]] = []
         self.best_score = float("-inf")
         self.ablation_mode = str(self.cfg["ablation_mode"])
+
+        # S1: optional per-epoch context embedding cache.
+        self.neighbor_embedding_cache: Any | None = None
+
+    def attach_neighbor_embedding_cache(self, cache: Any) -> None:
+        """Bind a NeighborEmbeddingCache to the trainer/model."""
+        self.neighbor_embedding_cache = cache
+
+    def _refresh_neighbor_embedding_cache(self) -> None:
+        if self.neighbor_embedding_cache is None:
+            return
+        unwrapped = self.accelerator.unwrap_model(self.model)
+        self.neighbor_embedding_cache.rebuild(unwrapped.text_encoder)
+        unwrapped.context_embedding_cache = self.neighbor_embedding_cache
 
     def _make_optimizer(self, stage: str) -> AdamW:
         lr = float(self.cfg["pretrain_lr"] if stage == "pretrain" else self.cfg["finetune_lr"])
@@ -308,6 +334,7 @@ class MetaGraphSciTrainerEval:
         epoch_bar = tqdm(range(1, epochs + 1), desc="Pretrain", unit="ep", disable=not show_bar)
 
         for epoch in epoch_bar:
+            self._refresh_neighbor_embedding_cache()
             self.model.train()
             total_loss, total_steps = 0.0, 0.0
             step_bar = tqdm(
@@ -450,6 +477,7 @@ class MetaGraphSciTrainerEval:
         epoch_bar = tqdm(range(1, epochs + 1), desc="Finetune", unit="ep", disable=not show_bar)
 
         for epoch in epoch_bar:
+            self._refresh_neighbor_embedding_cache()
             self.model.train()
             total_loss, total_sup, total_ssl = 0.0, 0.0, 0.0
             total_selected, total_unlabeled  = 0, 0
@@ -468,7 +496,7 @@ class MetaGraphSciTrainerEval:
                     optimizer.zero_grad()
 
                     _, labeled_logits, _ = self.forward(labeled_batch)
-                    sup_loss = self.supervised_loss(
+                    sup_loss = self.gt_loss(
                         labeled_logits, labeled_batch["labels"])
 
                     _, unlabeled_logits, unlabeled_probs = self.forward(unlabeled_batch)

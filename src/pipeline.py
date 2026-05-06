@@ -12,7 +12,7 @@ import yaml
 from loguru import logger
 
 from .data import (
-    MultiScaleDocumentDataset, NeighborCache,
+    MultiScaleDocumentDataset, NeighborCache, NeighborEmbeddingCache,
     build_embedding_cache, build_encoder_cache, build_graph_cache,
     build_loader, build_neighbor_cache, build_tokenization_cache,
     cache_root, caching_enabled,
@@ -53,6 +53,31 @@ def set_seed(seed: int) -> None:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.set_float32_matmul_precision("high")
+
+
+def build_class_balanced_sampler(dataset: Any) -> Any:
+    """WeightedRandomSampler with weights ~ 1/sqrt(class_count[label]).
+
+    Square-root scaling tames the long tail without fully inverting it
+    (which over-samples singletons and starves dominant classes).
+    """
+    documents = dataset.documents
+    labels = documents["label"].to_list()
+    counts: dict[int, int] = {}
+    for lbl in labels:
+        if lbl is None: continue
+        counts[int(lbl)] = counts.get(int(lbl), 0) + 1
+
+    weights = []
+    for lbl in labels:
+        if lbl is None:
+            weights.append(0.0)
+        else:
+            weights.append(1.0 / float(np.sqrt(max(counts.get(int(lbl), 1), 1))))
+
+    weights_t = torch.tensor(weights, dtype=torch.double)
+    return torch.utils.data.WeightedRandomSampler(
+        weights=weights_t, num_samples=len(weights_t), replacement=True)
 
 
 def labeled_prior(documents: pl.DataFrame, num_classes: int) -> list[float]:
@@ -100,7 +125,8 @@ def build_dataset(
         data_cfg["max_seq_length"], context_budget(data_cfg), max_authors, context_documents=context_docs,
         context_cache=context_cache, cache_text=data_cfg["cache_text"],
         pretokenize_context=data_cfg["pretokenize_context"], hop_profile_dim=data_cfg["k_hops"],
-        spectral_dim=data_cfg["spectral_dim"], pretokenized=pretokenized)
+        spectral_dim=data_cfg["spectral_dim"], pretokenized=pretokenized,
+        context_max_seq_length=data_cfg.get("context_max_seq_length"))
 
 
 def cache_metadata(data_cfg: dict[str, Any], node_ids: list[int], seed: int) -> dict[str, Any]:
@@ -400,9 +426,28 @@ def main() -> None:
                 model=build_model(bundle, cfg), citation_graph=bundle["graph"], neighbor_cache=bundle["train_neighbor_cache"],
                 config=trainer_cfg, label_names=bundle["label_names"], labeled_class_prior=bundle["labeled_prior"])
 
+            # S1: build per-epoch neighbour embedding cache over the full
+            # corpus (transductive: every doc may show up as a context node).
+            if bool(cfg["data"].get("use_neighbor_embedding_cache", True)):
+                neighbor_embed_cache = NeighborEmbeddingCache(
+                    documents=bundle["documents"],
+                    tokenizer=create_tokenizer(cfg["model"]["tokenizer_name"]),
+                    text_dim=int(cfg["model"]["text_dim"]),
+                    max_seq_length=int(cfg["data"].get("context_max_seq_length", 64)),
+                    device=trainer.device,
+                    store_on_cpu=bool(cfg["data"].get("neighbor_cache_on_cpu", False)))
+                trainer.attach_neighbor_embedding_cache(neighbor_embed_cache)
+
             train_cfg = cfg["train"]
             pretrain_loader = build_loader(bundle["datasets"]["pretrain"], batch_size=train_cfg["batch_size"], shuffle=True, num_workers=train_cfg["num_workers"])
-            labeled_loader = build_loader(bundle["datasets"]["labeled"], batch_size=train_cfg["batch_size"], shuffle=True, num_workers=train_cfg["num_workers"])
+
+            labeled_sampler = None
+            if bool(train_cfg.get("use_class_balanced_sampling", True)):
+                labeled_sampler = build_class_balanced_sampler(bundle["datasets"]["labeled"])
+            labeled_loader = build_loader(
+                bundle["datasets"]["labeled"], batch_size=train_cfg["batch_size"],
+                shuffle=(labeled_sampler is None), num_workers=train_cfg["num_workers"],
+                sampler=labeled_sampler)
             unlabeled_loader = build_loader(bundle["datasets"]["unlabeled"], batch_size=train_cfg["batch_size"], shuffle=True, num_workers=train_cfg["num_workers"])
             val_loader = build_loader(bundle["datasets"]["val"], batch_size=train_cfg["batch_size"], shuffle=False, num_workers=train_cfg["num_workers"])
             test_loader = build_loader(bundle["datasets"]["test"], batch_size=train_cfg["batch_size"], shuffle=False, num_workers=train_cfg["num_workers"])
