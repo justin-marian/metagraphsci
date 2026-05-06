@@ -146,7 +146,7 @@ def direct_neighbors(graph: GraphData, node_id: int) -> set[int]:
     Self-loops are excluded because scoring a node against itself is
     meaningless and pollutes the cache with useless entries.
     """
-    return graph.out_neighbors.get(node_id, set()) | graph.in_neighbors.get(node_id, set()) - {node_id}
+    return (graph.out_neighbors.get(node_id, set()) | graph.in_neighbors.get(node_id, set())) - {node_id}
 
 
 def top_k_scores(graph: GraphData, node_ids: list[int]) -> dict[int, dict[int, float]]:
@@ -192,7 +192,7 @@ def _score_chunk(
         for neighbor_id in candidates:
             if hub_thr > 0 and in_map[neighbor_id] > hub_thr:
                 continue
-            connectivity = in_map[neighbor_id] + out_map[neighbor_id] / max_degree
+            connectivity = (in_map[neighbor_id] + out_map[neighbor_id]) / max_degree
             # Inline edge_type → reciprocity_value
             has_in = (neighbor_id, node_id) in edge_set
             has_out = (node_id, neighbor_id) in edge_set

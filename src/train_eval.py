@@ -67,6 +67,10 @@ class MetaGraphSciTrainerEval:
         # from the very first finetune step, before the model was reliable enough
         # to generate trustworthy pseudo-targets.
         "lambda_ssl": 0.5,
+        "lambda_ssl_final": 0.5,
+        "supervised_warmup_epochs": 5,
+        "pseudo_ramp_epochs": 8,
+        "min_pseudo_confidence": 0.0,
 
         "ablation_mode": "full",
 
@@ -132,6 +136,17 @@ class MetaGraphSciTrainerEval:
         self.history: list[dict[str, float | int | str]] = []
         self.best_score = float("-inf")
         self.ablation_mode = str(self.cfg["ablation_mode"])
+
+    def pseudo_weight(self, epoch: int) -> float:
+        """Return the pseudo-label loss weight for the current fine-tuning epoch."""
+        warmup = int(self.cfg.get("supervised_warmup_epochs", 0))
+        if epoch <= warmup:
+            return 0.0
+
+        ramp_epochs = max(1, int(self.cfg.get("pseudo_ramp_epochs", 1)))
+        final = float(self.cfg.get("lambda_ssl_final", self.cfg.get("lambda_ssl", 0.0)))
+        progress = min(1.0, float(epoch - warmup) / float(ramp_epochs))
+        return final * progress
 
     def _make_optimizer(self, stage: str) -> AdamW:
         lr = float(self.cfg["pretrain_lr"] if stage == "pretrain" else self.cfg["finetune_lr"])
@@ -451,7 +466,7 @@ class MetaGraphSciTrainerEval:
         """Semi-supervised fine-tuning with pseudo-labeling."""
         history: dict[str, list[float]] = {
             "epoch": [], "train_loss": [], "sup_loss": [],
-            "ssl_loss": [], "pseudo_label_ratio": []}
+            "ssl_loss": [], "pseudo_label_ratio": [], "pseudo_loss_weight": []}
 
         unlabeled_stream = cycle(unlabeled_loader)
         show_bar  = self.accelerator.is_local_main_process
@@ -480,8 +495,13 @@ class MetaGraphSciTrainerEval:
                         labeled_logits, labeled_batch["labels"])
 
                     _, unlabeled_logits, unlabeled_probs = self.forward(unlabeled_batch)
-                    selected, pseudo_labels, thresholds, _ = (
-                        self.pseudo_labeler.select(unlabeled_probs, epoch=epoch))
+                    with torch.no_grad():
+                        selected, pseudo_labels, thresholds, adjusted_probs = (
+                            self.pseudo_labeler.select(unlabeled_probs.detach(), epoch=epoch))
+                        min_conf = float(self.cfg.get("min_pseudo_confidence", 0.0))
+                        if min_conf > 0.0:
+                            confidence = adjusted_probs.max(dim=1).values
+                            selected = selected & (confidence >= min_conf)
 
                     if selected.any():
                         ssl_loss = self.supervised_loss(
@@ -489,7 +509,8 @@ class MetaGraphSciTrainerEval:
                     else:
                         ssl_loss = unlabeled_logits.new_zeros(())
 
-                    loss = sup_loss + float(self.cfg["lambda_ssl"]) * ssl_loss
+                    ssl_weight = self.pseudo_weight(epoch)
+                    loss = sup_loss + ssl_weight * ssl_loss
                     self.accelerator.backward(loss)
                     self.clip()
                     optimizer.step()
@@ -525,6 +546,7 @@ class MetaGraphSciTrainerEval:
                 "sup_loss":            total_sup  / n_steps,
                 "ssl_loss":            total_ssl  / n_steps,
                 "pseudo_label_ratio":  total_selected / max(total_unlabeled, 1),
+                "pseudo_loss_weight": self.pseudo_weight(epoch),
                 "pseudo_threshold_mean": (float(np.mean(threshold_track))
                 if threshold_track else float("nan")),
             }
@@ -544,7 +566,7 @@ class MetaGraphSciTrainerEval:
                     self.save_checkpoint(epoch=epoch, best_score=score)
 
             history["epoch"].append(float(epoch))
-            for k in ["train_loss", "sup_loss", "ssl_loss", "pseudo_label_ratio"]:
+            for k in ["train_loss", "sup_loss", "ssl_loss", "pseudo_label_ratio", "pseudo_loss_weight"]:
                 history[k].append(float(row[k]))
 
             self.history.append(row)
@@ -558,7 +580,8 @@ class MetaGraphSciTrainerEval:
                     f"[Finetune] epoch={epoch}/{epochs} "
                     f"train_loss={row['train_loss']:.4f} "
                     f"sup={row['sup_loss']:.4f} ssl={row['ssl_loss']:.4f} "
-                    f"pseudo_ratio={row['pseudo_label_ratio']:.3f}")
+                    f"pseudo_ratio={row['pseudo_label_ratio']:.3f} "
+                    f"pseudo_w={row['pseudo_loss_weight']:.3f}")
                 if isinstance(val_score, (int, float)):
                     summary += f" val_{self.cfg['selection_metric']}={float(val_score):.4f}"
                 logger.info(summary)

@@ -72,6 +72,35 @@ def labeled_prior(documents: pl.DataFrame, num_classes: int) -> list[float]:
     return (prior / np.maximum(prior.sum(), 1.0)).tolist()
 
 
+def class_count_frame(documents: pl.DataFrame, name: str) -> pl.DataFrame:
+    """Return per-class counts for split diagnostics."""
+    return (
+        documents.drop_nulls("label")
+        .with_columns(pl.col("label").cast(pl.Int64))
+        .group_by("label")
+        .agg(pl.len().alias(name))
+        .sort("label"))
+
+
+def assert_label_integrity(docs: pl.DataFrame, num_classes: int) -> None:
+    """Fail early when labels cannot be consumed by CrossEntropyLoss."""
+    labels = docs.drop_nulls("label")["label"].cast(pl.Int64).to_list()
+    unique = sorted(set(int(v) for v in labels))
+    expected = list(range(num_classes))
+    if unique != expected:
+        raise ValueError(
+            f"Labels must be contiguous ids from 0 to {num_classes - 1}; "
+            f"got first labels={unique[:10]}. "
+            "Fix prepare_documents/map_numeric_labels before training." )
+
+
+def log_split_diagnostics(train_docs: pl.DataFrame, val_docs: pl.DataFrame, test_docs: pl.DataFrame) -> None:
+    """Log class coverage per split so random-level accuracy is visible before training."""
+    diag = class_count_frame(train_docs, "train")
+    for frame, name in [(val_docs, "val"), (test_docs, "test")]:
+        diag = diag.join(class_count_frame(frame, name), on="label", how="outer_coalesce")
+    logger.info("Class-count diagnostics by split:\n{}", diag.fill_null(0))
+
 def infer_max_authors(docs: pd.DataFrame, fallback: int = 8, cap: int = 32) -> int:
     """Calculates a robust upper bound for author sequence lengths."""
     if "authors" not in docs.columns: 
@@ -246,8 +275,17 @@ def build_run_bundle(cfg: dict[str, Any], seed: int) -> dict[str, Any]:
 
     docs, label_names = load_documents(data_cfg["documents"], label_column=data_cfg["label_column"])
 
-    train_docs, val_docs, test_docs = split_documents(docs, test_size=data_cfg["test_size"], val_size=data_cfg["val_size"], seed=seed, strategy=data_cfg["split_strategy"])
-    labeled_docs, unlabeled_docs = create_low_label_split(train_docs, label_ratio=data_cfg["label_ratio"], seed=seed)
+    num_classes = len(label_names) if label_names else int(
+        docs.drop_nulls("label").select(pl.col("label").cast(pl.Int64)).n_unique())
+    assert_label_integrity(docs, num_classes)
+
+    train_docs, val_docs, test_docs = split_documents(
+        docs, test_size=data_cfg["test_size"], val_size=data_cfg["val_size"],
+        seed=seed, strategy=data_cfg["split_strategy"])
+    log_split_diagnostics(train_docs, val_docs, test_docs)
+
+    labeled_docs, unlabeled_docs = create_low_label_split(
+        train_docs, label_ratio=data_cfg["label_ratio"], seed=seed)
 
     graph, graphs = load_or_build_graph(
         cfg, docs,
@@ -302,8 +340,6 @@ def build_run_bundle(cfg: dict[str, Any], seed: int) -> dict[str, Any]:
         "val": build_dataset(val_docs, docs if data_cfg["graph_mode"] == "transductive" else val_docs, tokenizer, encoders, val_cache, data_cfg, pretokenized=tokenized_lookup),
         "test": build_dataset(test_docs, docs if data_cfg["graph_mode"] == "transductive" else test_docs, tokenizer, encoders, test_cache, data_cfg, pretokenized=tokenized_lookup)
     }
-
-    num_classes = len(label_names) if label_names else int(docs.drop_nulls("label").select(pl.col("label").cast(pl.Int64)).n_unique())
 
     # Assert the labeled split covers every class.
     # With label_ratio=0.05 some classes may be entirely absent from the

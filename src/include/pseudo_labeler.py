@@ -110,7 +110,9 @@ class PseudoLabeler:
         keep = confidence >= thresholds[pseudo_labels]
 
         if epoch <= self.warmup_epochs:
-            keep = torch.zeros_like(keep)
+            # Warmup must be absolute. Do not allow min_per_class to re-enable
+            # pseudo-labels while the classifier is still near-random.
+            return torch.zeros_like(keep), pseudo_labels, thresholds, adjusted
 
         if self.min_per_class > 0:
             for cls in range(adjusted.size(1)):
