@@ -109,5 +109,9 @@ class NeighborhoodAwareContrastiveLoss(nn.Module):
         # pressure for semantically related scholarly documents.
         negative_values = (exp_logits * negative_weights).sum(dim=1)
 
-        loss = -torch.log(positive_values / (positive_values + negative_values + self.eps))
+        # Guard against log(0) when positive_values is near-zero.
+        # The old formula -log(pos / (pos + neg + eps)) still computes log(0)
+        # when pos - 0 (e.g. early training with very low cosine similarity).
+        # Adding eps to the numerator prevents +inf loss / NaN gradients.
+        loss = -torch.log((positive_values + self.eps) / (positive_values + negative_values + self.eps))
         return loss.mean()

@@ -17,7 +17,9 @@ data:
   target_col: target
   split_strategy: time
   graph_mode: transductive
-  label_ratio: 0.05
+  # Raised from 0.05 — too sparse for the model to cover all classes
+  # in labeled split; 0.20 is the minimum viable smoke ratio.
+  label_ratio: 0.20
   test_size: 0.1
   val_size: 0.1
   max_context_size: 4
@@ -67,7 +69,10 @@ train:
   batch_size: 32
   num_workers: 8
   pretrain_epochs: 1
-  finetune_epochs: 1
+  # Raised from 1 — 1 epoch gives the supervised head <70 gradient
+  # steps (at batch 32, label_ratio 0.20) before evaluation, not enough to
+  # move the cosine classifier off random.
+  finetune_epochs: 3
   seeds:
     - 42
   ablations:
@@ -80,14 +85,19 @@ trainer:
   weight_decay: 0.01
   max_grad_norm: 1.0
   selection_metric: macro_f1
-  lambda_ssl: 1.0
-  contrastive_temperature: 0.07
+  lambda_ssl: 0.5   # halved from 1.0 — pseudo-labels need a stable model first
+  # Raised from 0.07 — SciBERT embeddings are naturally clustered;
+  # 0.07 makes gradients vanish for non-boundary pairs.
+  contrastive_temperature: 0.10
   metadata_negative_weight: 0.25
   ssl_text_dropout: 0.15
   pseudo_label:
     beta: 0.9
     temperature: 1.0
-    warmup_epochs: 1
+    # Raised to match finetune_epochs=3 — with warmup_epochs=1 the
+    # pseudo-labeler fired at epoch 2 from an unstrained model, injecting
+    # garbage supervision that dominated the supervised loss.
+    warmup_epochs: 3
     min_per_class: 1
     ema_momentum: 0.9
     distributionalignment: true

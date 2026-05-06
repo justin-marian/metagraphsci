@@ -52,8 +52,18 @@ class PseudoLabeler:
         collapsing the adaptive curriculum back to cold-start.
         """
         ema = state.get("ema_class_max")
-        if isinstance(ema, Tensor):              # was: `not isinstance` — inverted
+        if isinstance(ema, Tensor):
             self.ema_class_max = ema.clone()
+        else:
+            # Warn when loading a checkpoint written by the old (broken)
+            # code that always saved ema_class_max=None.  Silently resetting to
+            # cold-start caused the adaptive curriculum to degrade without notice.
+            if "ema_class_max" in state:
+                import warnings
+                warnings.warn(
+                    "PseudoLabeler checkpoint contains ema_class_max=None "
+                    "Adaptive curriculum will restart from cold-start.",
+                    UserWarning, stacklevel=2)
         prior = state.get("target_prior")
         if isinstance(prior, Tensor):
             self.target_prior = prior.clone()

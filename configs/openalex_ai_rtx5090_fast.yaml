@@ -12,7 +12,9 @@ data:
   target_col: target
   split_strategy: time
   graph_mode: transductive
-  label_ratio: 0.1
+  # At 0.1 some minority classes may be absent, causing the cosine classifier
+  # head to never receive a gradient signal for those classes.
+  label_ratio: 0.15
   test_size: 0.2
   val_size: 0.1
   max_context_size: 8
@@ -75,14 +77,19 @@ trainer:
   weight_decay: 0.01
   max_grad_norm: 1.0
   selection_metric: macro_f1
-  lambda_ssl: 1.0
-  contrastive_temperature: 0.07
+  lambda_ssl: 0.5   # equal pseudo-label weight too aggressive before model stabilises
+  # SciBERT embeddings are naturally clustered;
+  # 0.07 makes gradients vanish for non-boundary pairs in academic corpora.
+  contrastive_temperature: 0.10
   metadata_negative_weight: 0.25
   ssl_text_dropout: 0.15
   pseudo_label:
     beta: 0.9
     temperature: 1.0
-    warmup_epochs: 1
+    # Raised to equal finetune_epochs (2): pseudo-labeling must not
+    # fire until the model is stable; warmup_epochs=1 allowed garbage targets
+    # at epoch 2 of a 2-epoch run, overriding the supervised signal entirely.
+    warmup_epochs: 2
     min_per_class: 1
     ema_momentum: 0.9
     distributionalignment: true

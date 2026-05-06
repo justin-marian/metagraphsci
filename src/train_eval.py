@@ -205,7 +205,12 @@ class MetaGraphSciTrainerEval:
 
         same_venue     = venue.unsqueeze(1)  == venue.unsqueeze(0)
         same_publisher = publisher.unsqueeze(1) == publisher.unsqueeze(0)
-        close_year     = (years.unsqueeze(1) - years.unsqueeze(0)).abs() <= (2.0 / 26.0)
+        # Raw ±2-year window instead of 2.0/26.0.
+        # The old divisor assumed years are normalised over a 26-year range,
+        # but MetadataEncoder receives raw year values (e.g. 2018, 2021).
+        # The 2.0/26.0 threshold (~0.077) would only match papers published
+        # within ~2 months of each other, making close_year almost always False.
+        close_year     = (years.unsqueeze(1) - years.unsqueeze(0)).abs() <= 2.0
 
         affinity = same_venue | same_publisher | close_year
         affinity.fill_diagonal_(False)
@@ -235,12 +240,15 @@ class MetaGraphSciTrainerEval:
 
         for i, doc_id in enumerate(doc_ids):
             neighbors  = self.neighbor_cache.get(int(doc_id), set())
+            # Graph-adjacency alone as the positive criterion.
+            # The old code required BOTH adjacency AND metadata compatibility,
+            # whose intersection is almost always empty in a mini-batch, causing
+            # the contrastive loss to degenerate to the SimCLR diagonal only and
+            # the model to never learn from graph topology.
+            # Metadata is still used for negative *softening* inside the loss.
             candidates = [
                 j for j, other_id in enumerate(doc_ids)
-                if i != j
-                and int(other_id) in neighbors
-                and bool(metadata_affinity[i, j].item())]
-            # No metadata-only fallback: empty rows use diagonal in the loss.
+                if i != j and int(other_id) in neighbors]
             for j in candidates:
                 mask[i, j] = True
 
@@ -579,46 +587,61 @@ class MetaGraphSciTrainerEval:
         val_loader: DataLoader | None = None,
         test_loader: DataLoader | None = None,
         pretrain_epochs: int = 20,
-        finetune_epochs: int = 10,
+        finetune_epochs: int = 10
     ) -> dict[str, object]:
         """Orchestrates pretraining → fine-tuning → test evaluation."""
 
-        # BUG FIX (dual-optimizer memory waste): create each optimizer just
-        # before its stage so optimizer state (2× model params for m1/m2) is
-        # only live for the stage that uses it.  Both are still prepared via
-        # accelerator so mixed-precision wrapping is consistent.
+        # FIX #3: prepare model and loaders first — no optimizers yet.
+        # Creating both AdamW optimizers simultaneously doubled peak optimizer
+        # memory (each holds 2x |params| moment tensors) and caused fused=True
+        # AdamW to receive CPU parameters before prepare moved the model to GPU.
+        # Solution: prepare loaders + model together, then create and prepare
+        # each optimizer just before its own stage so only one set of moment
+        # tensors is ever live at a time.
+        items: list[Any] = [self.model, pretrain_loader, labeled_loader, unlabeled_loader]
+        if val_loader  is not None: 
+            items.append(val_loader)
+        if test_loader is not None: 
+            items.append(test_loader)
+
+        prepared         = self.accelerator.prepare(*items)
+        self.model       = prepared[0]
+        pretrain_loader  = prepared[1]
+        labeled_loader   = prepared[2]
+        unlabeled_loader = prepared[3]
+
+        cursor = 4
+        if val_loader  is not None:
+            val_loader  = prepared[cursor]; cursor += 1
+        if test_loader is not None:
+            test_loader = prepared[cursor]
+
+        # Build pretrain optimizer + scheduler AFTER model is on the right device
         pretrain_optimizer = self._make_optimizer("pretrain")
-        finetune_optimizer = self._make_optimizer("finetune")
-
-        items: list[Any] = [
-            self.model, pretrain_optimizer, finetune_optimizer,
-            pretrain_loader, labeled_loader, unlabeled_loader]
-        if val_loader   is not None: items.append(val_loader)
-        if test_loader  is not None: items.append(test_loader)
-
-        prepared = self.accelerator.prepare(*items)
-        self.model        = prepared[0]
-        pretrain_optimizer = prepared[1]
-        finetune_optimizer = prepared[2]
-        pretrain_loader    = prepared[3]
-        labeled_loader     = prepared[4]
-        unlabeled_loader   = prepared[5]
-
-        cursor = 6
-        if val_loader  is not None: val_loader  = prepared[cursor]; cursor += 1
-        if test_loader is not None: test_loader = prepared[cursor]
-
-        # Build schedulers AFTER prepare so step counts use prepared loader lengths
-        pretrain_total = max(1, len(pretrain_loader)) * pretrain_epochs
-        finetune_total = max(1, len(labeled_loader))  * finetune_epochs
+        pretrain_optimizer = self.accelerator.prepare(pretrain_optimizer)
+        pretrain_total     = max(1, len(pretrain_loader)) * pretrain_epochs
         pretrain_scheduler = self._make_scheduler(pretrain_optimizer, pretrain_total)
-        finetune_scheduler = self._make_scheduler(finetune_optimizer, finetune_total)
+
+        # finetune_total is pre-computed here so the variable exists in scope;
+        # the actual optimizer is created after pretraining completes (see below)
+        # to avoid holding two optimizer states simultaneously.
+        finetune_total = max(1, len(labeled_loader)) * finetune_epochs
 
         self.start_run()
         try:
             pretrain_result = self.pretrain(
                 pretrain_loader, pretrain_optimizer, pretrain_scheduler,
                 epochs=pretrain_epochs)
+
+            # Release pretrain optimizer state before
+            # allocating the finetune optimizer so only one AdamW moment buffer
+            # (2x |params|) is live at a time.
+            del pretrain_optimizer, pretrain_scheduler
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            finetune_optimizer = self._make_optimizer("finetune")
+            finetune_optimizer = self.accelerator.prepare(finetune_optimizer)
+            finetune_scheduler = self._make_scheduler(finetune_optimizer, finetune_total)
 
             finetune_result = self.finetune(
                 labeled_loader, unlabeled_loader,

@@ -273,6 +273,10 @@ class GPSCitationLayer(nn.Module):
             logits = logits.masked_fill(key_padding_mask[:, None, None, :], float('-inf'))
 
         attn_weights = self.dropout_attn(torch.softmax(logits, dim=-1))
+        # All-masked rows (paper with zero valid context neighbours)
+        # produce all-(-inf) logits, and softmax(-inf, ..., -inf) = NaN.
+        # NaNs propagate through matmul into tokens and corrupt the entire batch.
+        attn_weights = torch.nan_to_num(attn_weights, nan=0.0)
         attn_out = torch.matmul(attn_weights, v)
         attn_out = attn_out.transpose(1, 2).contiguous().view(B, T, D)
         attn_out = self.out_proj(attn_out)

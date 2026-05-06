@@ -304,6 +304,20 @@ def build_run_bundle(cfg: dict[str, Any], seed: int) -> dict[str, Any]:
     }
 
     num_classes = len(label_names) if label_names else int(docs.drop_nulls("label").select(pl.col("label").cast(pl.Int64)).n_unique())
+
+    # Assert the labeled split covers every class.
+    # With label_ratio=0.05 some classes may be entirely absent from the
+    # labeled set, causing CrossEntropyLoss to operate on a subset of valid
+    # class indices and the cosine classifier to never move off random for the
+    # missing classes.  Raise early with an actionable message.
+    labeled_class_count = int(labeled_docs.drop_nulls("label").select(
+        pl.col("label").cast(pl.Int64)).n_unique())
+    if labeled_class_count < num_classes:
+        raise ValueError(
+            f"Labeled split only covers {labeled_class_count}/{num_classes} classes. "
+            f"Increase data.label_ratio (currently {data_cfg['label_ratio']}) "
+            f"so every class has at least one labeled example."
+        )
     return {
         "documents": docs, "graph": graph, "label_names": label_names, "encoders": encoders, "datasets": datasets,
         "train_neighbor_cache": neighbor_sets(train_cache), "num_classes": num_classes, "labeled_prior": labeled_prior(labeled_docs, num_classes),
