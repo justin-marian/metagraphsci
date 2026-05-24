@@ -30,7 +30,7 @@ build_loader                - Create a DataLoader with project defaults.
 
 from __future__ import annotations
 
-from .cache_paths import cache_root, caching_enabled, docs_fingerprint
+from .cache_utils import cache_root, caching_enabled, docs_fingerprint
 from .context_caching import build_neighbor_cache, load_neighbor_cache, save_neighbor_cache
 from .dataset import MultiScaleDocumentDataset, NeighborCache, build_loader, create_tokenizer
 from .embedding_cache import (
