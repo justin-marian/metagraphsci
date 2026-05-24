@@ -100,7 +100,6 @@ CLAUDE.md.local
 Thumbs.db
 desktop.ini
 # Project docs (kept locally only)
-/docs/
 /.cache/
 /data/
 /dump_test.py
