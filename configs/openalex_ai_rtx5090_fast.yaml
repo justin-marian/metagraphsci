@@ -16,7 +16,7 @@ data:
   label_column: label
   source_col: source
   target_col: target
-  split_strategy: time
+  split_strategy: random
   graph_mode: transductive
   label_ratio: 0.25
   test_size: 0.2
