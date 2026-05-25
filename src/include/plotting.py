@@ -55,7 +55,7 @@ def plot_training_history(
 
     selected_metrics = list(metrics or [
         "train_loss",
-        "val_loss", "val_accuracy", "val_macro_f1",
+        "val_loss", "val_accuracy", "val_macro_f1", "val_macro_f1_supported",
         "val_balanced_accuracy"
     ])
 

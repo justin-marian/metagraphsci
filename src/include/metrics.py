@@ -9,7 +9,8 @@ from sklearn.metrics import (
 
 def multiclass_metrics(
     y_true: np.ndarray, y_pred: np.ndarray,
-    y_prob: np.ndarray | None = None
+    y_prob: np.ndarray | None = None,
+    supported_labels: Sequence[int] | None = None,
 ) -> dict[str, float]:
     """
     Collects the main summary indicators used in multiclass evaluation.
@@ -25,11 +26,19 @@ def multiclass_metrics(
         "micro_f1": float(f1_score(y_true, y_pred, average="micro", zero_division=0)),
         "macro_f1": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
         "weighted_f1": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)),
+    }
+
+    if supported_labels is not None and len(supported_labels) > 0:
+        metrics["macro_f1_supported"] = float(f1_score(
+            y_true, y_pred, labels=list(supported_labels),
+            average="macro", zero_division=0))
+
+    metrics.update({
         "macro_precision": float(precision_score(y_true, y_pred, average="macro", zero_division=0)),
         "macro_recall": float(recall_score(y_true, y_pred, average="macro", zero_division=0)),
         "mcc": float(matthews_corrcoef(y_true, y_pred)),
         "cohen_kappa": float(cohen_kappa_score(y_true, y_pred))
-    }
+    })
 
     # Some indicators require confidence distributions rather than final labels.
     # These are optional because not every baseline exposes calibrated scores.

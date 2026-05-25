@@ -341,18 +341,18 @@ def build_run_bundle(cfg: dict[str, Any], seed: int) -> dict[str, Any]:
         "test": build_dataset(test_docs, docs if data_cfg["graph_mode"] == "transductive" else test_docs, tokenizer, encoders, test_cache, data_cfg, pretokenized=tokenized_lookup)
     }
 
-    # Assert the labeled split covers every class.
-    # With label_ratio=0.05 some classes may be entirely absent from the
-    # labeled set, causing CrossEntropyLoss to operate on a subset of valid
-    # class indices and the cosine classifier to never move off random for the
-    # missing classes.  Raise early with an actionable message.
-    labeled_class_count = int(labeled_docs.drop_nulls("label").select(
-        pl.col("label").cast(pl.Int64)).n_unique())
-    if labeled_class_count < num_classes:
-        raise ValueError(
-            f"Labeled split only covers {labeled_class_count}/{num_classes} classes. "
-            f"Increase data.label_ratio (currently {data_cfg['label_ratio']}) "
-            f"so every class has at least one labeled example."
+    # Some datasets contain ultra-rare classes that cannot be placed in train by
+    # any split strategy (e.g. classes with only one total sample). Those classes
+    # are unlearnable; warn and continue so the pipeline can still train on the
+    # rest.
+    labeled_labels = set(labeled_docs.drop_nulls("label").select(
+        pl.col("label").cast(pl.Int64)).to_series().to_list())
+    if len(labeled_labels) < num_classes:
+        missing = sorted(set(range(num_classes)) - labeled_labels)
+        logger.warning(
+            f"Labeled split only covers {len(labeled_labels)}/{num_classes} classes; "
+            f"missing class ids: {missing}. Training will proceed but predictions "
+            f"for these classes will stay at the cosine-prototype init."
         )
     return {
         "documents": docs, "graph": graph, "label_names": label_names, "encoders": encoders, "datasets": datasets,

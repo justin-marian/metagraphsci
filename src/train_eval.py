@@ -107,6 +107,7 @@ class MetaGraphSciTrainerEval:
         self.neighbor_cache = {int(k): set(map(int, v))
             for k, v in (neighbor_cache or {}).items()}
         self.label_names   = list(label_names) if label_names is not None else None
+        self.supported_labels = [i for i, p in enumerate(labeled_class_prior or []) if p > 0]
 
         self.output_dir      = Path(str(self.cfg["output_dir"]))
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -434,7 +435,8 @@ class MetaGraphSciTrainerEval:
 
         bundle = evaluate_predictions(
             y_true=y_true, y_pred=y_pred, y_prob=y_prob,
-            doc_ids=doc_id_arr, label_names=self.label_names)
+            doc_ids=doc_id_arr, label_names=self.label_names,
+            supported_labels=self.supported_labels or None)
 
         result: dict[str, Any] = {
             "split": split,

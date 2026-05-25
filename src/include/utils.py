@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 import polars as pl
 
-PRIMARY_METRICS = ["accuracy", "micro_f1", "macro_f1", "balanced_accuracy", "mcc"]
+PRIMARY_METRICS = ["accuracy", "micro_f1", "macro_f1", "macro_f1_supported", "balanced_accuracy", "mcc"]
 
 
 def ensure_dir(path: str | Path) -> Path:

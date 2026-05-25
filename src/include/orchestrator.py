@@ -14,7 +14,8 @@ from .utils import ensure_dir, save_frame
 
 def evaluate_predictions(
     y_true: Sequence[int], y_pred: Sequence[int], y_prob: np.ndarray | None = None,
-    doc_ids: Sequence[int] | None = None, label_names: Sequence[str] | None = None) -> dict[str, Any]:
+    doc_ids: Sequence[int] | None = None, label_names: Sequence[str] | None = None,
+    supported_labels: Sequence[int] | None = None) -> dict[str, Any]:
     """Bundle aggregate metrics, class reports, and prediction rows into one evaluation payload."""
     # Canonical Array Conversion
     # Convert all incoming sequences to stable NumPy arrays once at the evaluation
@@ -27,7 +28,7 @@ def evaluate_predictions(
     doc_id_arr = np.arange(len(y_true_arr)) if doc_ids is None else np.asarray(doc_ids)
 
     return {
-        "metrics": multiclass_metrics(y_true_arr, y_pred_arr, y_prob_arr),
+        "metrics": multiclass_metrics(y_true_arr, y_pred_arr, y_prob_arr, supported_labels=supported_labels),
         "per_class": per_class_metrics(y_true_arr, y_pred_arr, label_names),
         "predictions": prediction_table(doc_id_arr, y_true_arr, y_pred_arr, y_prob_arr)
     }
