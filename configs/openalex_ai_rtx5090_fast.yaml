@@ -63,7 +63,7 @@ model:
   latent_graph_top_k: 2
   hybrid_alpha_init: -2.0
 train:
-  batch_size: 48
+  batch_size: 24
   num_workers: 8
   pretrain_epochs: 2
   finetune_epochs: 12
@@ -74,7 +74,7 @@ train:
   - full
 trainer:
   mixed_precision: bf16
-  gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 2
   pretrain_lr: 1.0e-05
   finetune_lr: 2.0e-05
   weight_decay: 0.01
