@@ -149,7 +149,8 @@ def citation_edges_fingerprint(citations: pl.DataFrame | str | Path, source_col:
     if key is not None and key in _PATH_FP_MEMO:
         return _PATH_FP_MEMO[key]
 
-    digest = _edges_fingerprint_from_frame(pl.read_csv(citations), source_col, target_col)
+    reader = pl.read_parquet if str(citations).endswith(".parquet") else pl.read_csv
+    digest = _edges_fingerprint_from_frame(reader(citations), source_col, target_col)
     if key is not None:
         if len(_PATH_FP_MEMO) > 8:
             _PATH_FP_MEMO.clear()

@@ -422,7 +422,8 @@ def main() -> None:
     baseline_rows: list[dict[str, Any]] = []
     baselines_path = cfg["data"]["baselines"]
     if baselines_path and Path(baselines_path).exists():
-        baseline_rows = pl.read_csv(baselines_path).to_dicts()
+        reader = pl.read_parquet if str(baselines_path).endswith((".parquet", ".pq")) else pl.read_csv
+        baseline_rows = reader(baselines_path).to_dicts()
 
     all_run_rows: list[dict[str, Any]] = []
     
