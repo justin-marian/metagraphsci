@@ -152,12 +152,23 @@ def split_documents(
         raise ValueError(f"Unknown split strategy: {strategy!r}")
 
     pandas_docs = documents.to_pandas()
+
+    # StratifiedShuffleSplit requires >= 2 samples per class. Force singletons into train.
+    counts = pandas_docs["label"].value_counts()
+    singleton_labels = set(counts[counts < 2].index)
+    singletons = pandas_docs[pandas_docs["label"].isin(singleton_labels)]
+    splittable = pandas_docs[~pandas_docs["label"].isin(singleton_labels)]
+
     train_pd, test_pd = train_test_split(
-        pandas_docs, test_size=test_size, random_state=seed,
-        stratify=pandas_docs["label"])
+        splittable, test_size=test_size, random_state=seed,
+        stratify=splittable["label"])
     train_pd, val_pd = train_test_split(
         train_pd, test_size=val_size / (1.0 - test_size),
         random_state=seed, stratify=train_pd["label"])
+
+    if not singletons.empty:
+        import pandas as pd
+        train_pd = pd.concat([train_pd, singletons], ignore_index=True)
 
     return pl.from_pandas(train_pd), pl.from_pandas(val_pd), pl.from_pandas(test_pd)
 
