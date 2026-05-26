@@ -254,9 +254,18 @@ def plot_seed_metric_trend(all_runs: pl.DataFrame, output_path: str | Path, metr
     if all_runs.is_empty() or metric not in all_runs.columns:
         return out_path
 
-    frame = all_runs.to_pandas()
+    frame = all_runs.to_pandas().dropna(subset=[metric])
+    if frame.empty:
+        return out_path
+
+    hue_col = "ablation" if "ablation" in frame.columns and frame["ablation"].nunique() > 1 else "method"
+    x_col = "dataset" if frame["dataset"].nunique() > 1 else ("ablation" if hue_col != "ablation" and "ablation" in frame.columns else "method")
+    if x_col == hue_col:
+        x_col = "dataset"
+    dodge = 0.3 if frame[hue_col].nunique() > 1 else False
+
     plt.figure(figsize=(9, 5))
-    sns.pointplot(data=frame, x="dataset", y=metric, hue="method", dodge=True, errorbar=None)
+    sns.pointplot(data=frame, x=x_col, y=metric, hue=hue_col, dodge=dodge, errorbar=None)
     plt.title(f"{metric.replace('_', ' ').title()} across seeds")
     plt.tight_layout()
     plt.savefig(out_path, dpi=200, bbox_inches="tight")
