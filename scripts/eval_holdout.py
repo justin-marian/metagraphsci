@@ -103,12 +103,27 @@ def normalise_holdout(
 
 def main() -> None:
     args = parse_args()
+    # Unbuffered early print so nohup/tee logs show something immediately —
+    # the heavy imports below take 10-30 s on first run and would otherwise
+    # leave the log silent.
+    print(f"[eval_holdout] starting; config={args.config} holdout_dir={args.holdout_dir} "
+          f"ablation={args.ablation} seed={args.seed} device={args.device}", flush=True)
     device = force_device_env(args.device)
+    print(f"[eval_holdout] device resolved to {device}; importing torch/transformers ...", flush=True)
 
     from loguru import logger
+    import sys as _sys
+
+    # Loguru's default sink may have been removed by an earlier import; pin a
+    # stderr sink explicitly so nohup-redirected logs always capture progress.
+    logger.remove()
+    logger.add(_sys.stderr, level="INFO",
+               format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}")
+
     import polars as pl
     import pandas as pd
     import torch
+    print(f"[eval_holdout] torch={torch.__version__} cuda_available={torch.cuda.is_available()}", flush=True)
 
     from src.data import (
         build_loader, build_neighbor_cache, build_tokenization_cache,
