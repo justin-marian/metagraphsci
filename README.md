@@ -1,408 +1,292 @@
 <div align="center">
 
-<h1>
-  MetaGraphSci<br>
-  Multimodal Scientific Document Classification
-</h1>
+# MetaGraphSci
+
+### Multimodal Graph Self-Supervised Learning for Scientific Document Classification
+
+**Text-aware, metadata-aware, and citation-aware classification of scientific papers under limited supervision.**
 
 <p>
-  <b>
-  Classify scientific papers by combining text, metadata, and citation-graph context through <br>
-  SciBERT encoders, graph-aware citation modeling, gated fusion, and reproducible ablation studies.
-  </b>
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white">
+  <img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-2.x-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white">
+  <img alt="PyG" src="https://img.shields.io/badge/PyTorch%20Geometric-graph%20learning-3B82F6?style=for-the-badge">
+  <img alt="Transformers" src="https://img.shields.io/badge/HuggingFace-Transformers-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black">
+</p>
+<p>
+  <img alt="SciBERT" src="https://img.shields.io/badge/SciBERT-AllenAI-4F46E5?style=flat-square">
+  <img alt="LoRA" src="https://img.shields.io/badge/PEFT-LoRA%20%7C%20QLoRA-059669?style=flat-square">
+  <img alt="Graph SSL" src="https://img.shields.io/badge/Graph%20SSL-citation%20aware-0F766E?style=flat-square">
+  <img alt="License" src="https://img.shields.io/badge/License-research--code-64748B?style=flat-square">
+  <img alt="Status" src="https://img.shields.io/badge/Status-experimental-F59E0B?style=flat-square">
 </p>
 
 <p>
-  <a href="#1-system-overview"><img alt="Overview" src="https://img.shields.io/badge/Overview-system%20flow-2ea44f?style=flat-square&logo=readthedocs&logoColor=white"></a>
-  <a href="#2-module-reference"><img alt="Modules" src="https://img.shields.io/badge/Modules-encoders%20%7C%20fusion%20%7C%20losses-0969da?style=flat-square&logo=pytorch&logoColor=white"></a>
-  <a href="#3-training-pipeline"><img alt="Training" src="https://img.shields.io/badge/Training-contrastive%20%2B%20semi--supervised-b91c1c?style=flat-square&logo=lightning&logoColor=white"></a>
-  <a href="#4-configuration-reference"><img alt="Config" src="https://img.shields.io/badge/Config-YAML%20profiles-8250df?style=flat-square&logo=yaml&logoColor=white"></a>
-</p>
-
-<p>
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white">
-  <img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-2.x-EE4C2C?style=flat-square&logo=pytorch&logoColor=white">
-  <img alt="SciBERT" src="https://img.shields.io/badge/SciBERT-allenai-6366F1?style=flat-square">
-  <img alt="PEFT" src="https://img.shields.io/badge/PEFT-LoRA%20%7C%20QLoRA-22C55E?style=flat-square">
-</p>
-
-<p>
-  <img alt="Graph" src="https://img.shields.io/badge/Citation%20Graph-relation--aware-0a66c2?style=flat-square&logo=googlescholar&logoColor=white">
-  <img alt="Fusion" src="https://img.shields.io/badge/Fusion-gated%20residual-6f42c1?style=flat-square">
-  <img alt="Ablations" src="https://img.shields.io/badge/Ablations-text%20%7C%20metadata%20%7C%20citation-d73a49?style=flat-square">
-  <img alt="Evaluation" src="https://img.shields.io/badge/Evaluation-macro--F1%20%7C%20plots%20%7C%20artifacts-1f883d?style=flat-square">
-</p>
-
-<p>
-  <a href="#1-system-overview"><b>✨ Overview</b></a>
-  &nbsp;·&nbsp;
-  <a href="#2-module-reference"><b>🧩 Modules</b></a>
-  &nbsp;·&nbsp;
-  <a href="#3-training-pipeline"><b>🚀 Training</b></a>
-  &nbsp;·&nbsp;
-  <a href="#4-configuration-reference"><b>⚙️ Config</b></a>
-  &nbsp;·&nbsp;
-  <a href="#6-random-accuracy-debugging-checklist"><b>🛠️ Debugging</b></a>
+  <a href="#overview"><b>Overview</b></a> ·
+  <a href="#architecture"><b>Architecture</b></a> ·
+  <a href="#core-idea-in-formulas"><b>Formulas</b></a> ·
+  <a href="#quickstart"><b>Quickstart</b></a> ·
+  <a href="#results"><b>Results</b></a> ·
+  <a href="#documentation"><b>Docs</b></a>
 </p>
 
 </div>
 
 ---
 
-## :books: Documentation
+## Overview
 
-The README is organized as a compact technical guide for the current MetaGraphSci codebase.  
-It does not document non-existing FastAPI, frontend, RAG, Weaviate, or Ollama components.
+**MetaGraphSci** is a research codebase for scientific document classification under limited supervision. It combines three complementary evidence streams:
 
-| Section | What you will find | Open |
+| Modality | Input | Representation |
 |---|---|---|
-| :sparkles: Overview | Project purpose, multimodal signals, and end-to-end data flow. | [Read overview](#1-system-overview) |
-| :jigsaw: Module reference | Ablations, SciBERT text encoder, metadata encoder, citation graph encoder, fusion, classifier, losses, and pseudo-labeling. | [View modules](#2-module-reference) |
-| :rocket: Training pipeline | Data orchestration, contrastive pretraining, semi-supervised fine-tuning, and checkpoint selection. | [Train model](#3-training-pipeline) |
-| :gear: Configuration | Project, cache, data, model, train, and trainer settings. | [Edit config](#4-configuration-reference) |
-| :dart: Profiles | Tiny/debug, smoke test, and full experiment configurations. | [Choose profile](#5-recommended-profiles) |
-| :wrench: Debugging | Random-accuracy checklist and sanity checks for labels, ablations, pseudo-labeling, and graph context. | [Debug issues](#6-random-accuracy-debugging-checklist) |
-| :bar_chart: Sensitivity | High-impact hyperparameters and safe starting values. | [Tune safely](#7-hyperparameter-sensitivity-summary) |
+| Text | title and abstract | SciBERT with optional LoRA or QLoRA adaptation |
+| Metadata | venue, publisher, authors, year | embeddings plus Deep Cross Network interactions |
+| Citation graph | citation neighbours and edge types | relation-aware citation transformer |
 
-> [!NOTE]
-> For a first run, start with the **text-only** ablation. It verifies that labels, tokenization, and the SciBERT classifier can learn before graph and metadata streams are enabled.
+The goal is to learn a shared feature-graph space where textual semantics, bibliographic metadata, and citation structure reinforce each other. This is especially useful for long-tailed scientific taxonomies, where rare classes may have few labelled examples but remain close to related papers through citations and publication context.
 
 ---
 
-## 1. System Overview
+## Architecture
 
-MetaGraphSci is a multimodal classifier for scientific papers. It jointly models:
+<p align="center">
+  <img src="images/fusion-part.png" alt="MetaGraphSci multimodal fusion architecture" width="95%">
+</p>
 
-- **Text:** title and abstract encoded with SciBERT plus optional LoRA/QLoRA.
-- **Metadata:** venue, publisher, authors, and year encoded with a Deep Cross Network.
-- **Citation graph:** citation-neighborhood context encoded with a relation-aware graph transformer.
+The model encodes each modality independently, projects all branches into a shared latent space, and combines them through gated residual fusion. The classifier compares the fused document embedding against learnable class prototypes using normalized cosine similarity.
 
-The three representations are fused by a gated residual layer and classified with a normalized cosine-prototype classifier.
+<p align="center">
+  <img src="images/text-encoder.png" alt="Text encoder" width="48%">
+  <img src="images/metadata-encoder.png" alt="Metadata encoder" width="48%">
+</p>
 
----
+<p align="center">
+  <img src="images/graph-encoder.png" alt="Citation graph transformer" width="95%">
+</p>
 
-## 2. Module Reference
-
-### 2.1 Ablation Contracts
-
-The model supports four ablation modes:
-
-```python
-ABLATION_MODES = {
-    "full": {"text", "metadata", "citation"},
-    "text_only": {"text"},
-    "text_metadata": {"text", "metadata"},
-    "text_citation": {"text", "citation"},
-}
-```
-
-Ablation runs the full forward pass and zeroes disabled modality tensors before fusion. This keeps tensor shapes fixed across experiments.
-
-`NUM_RELATIONS = 4` corresponds to citation-edge structure, temporal proximity, metadata compatibility, and learned latent adjacency.
-
-### 2.2 TextEncoder
-
-`TextEncoder` wraps a SciBERT-compatible backbone and supports CLS pooling, LoRA, QLoRA, gradient checkpointing, partial layer freezing, and projection to `text_dim`.
-
-LoRA updates small low-rank adapters instead of the full backbone. QLoRA loads the base model in 4-bit quantization to reduce VRAM usage.
-
-### 2.3 MetadataEncoder
-
-`MetadataEncoder` embeds venue, publisher, authors, and year, then applies a Deep Cross Network to model explicit metadata interactions.
-
-Author padding uses `padding_idx=0`, allowing empty author slots to be ignored by masked mean pooling.
-
-### 2.4 CitationGraphTransformer
-
-`CitationGraphTransformer` encodes citation-neighborhood context using:
-
-- `LearnedCitationSelector`,
-- `StructuralPEEncoder`,
-- `RelationMixer`,
-- `GPSCitationLayer`,
-- optional `LatentGraphModule`,
-- gated pooling.
+### Pipeline stages
 
 ```text
-candidate context nodes
-        |
-        v
-LearnedCitationSelector
-        |
-        v
-GraphTokenizer + StructuralPEEncoder
-        |
-        v
-GPSCitationLayer x N
-        |
-        v
-gated pooling
-        |
-        v
-h_citation
+raw corpora
+  -> normalised documents.csv + citations.csv
+  -> token, embedding, metadata, graph, and neighbour caches
+  -> MultiScaleDocumentDataset
+  -> MetaGraphSci training and evaluation
 ```
 
-The implementation includes stability guards for empty spectral features and all-masked attention rows.
+---
 
-### 2.5 Fusion and Classifier
+## Core idea in formulas
 
-`MultimodalFusion` concatenates text, metadata, and citation vectors and applies gated residual fusion:
+### Multimodal fusion
+
+For a paper \(i\), the three encoders produce text, metadata, and citation representations:
+
+$$
+h_i^{t}=f_t(x_i^{title},x_i^{abstract}), \qquad
+h_i^{m}=f_m(v_i,p_i,a_i,y_i), \qquad
+h_i^{g}=f_g(i,\mathcal{N}_i,\mathcal{E}_i)
+$$
+
+The fused representation is a gated residual combination:
+
+$$
+z_i = \operatorname{Norm}\left(g_t \odot W_t h_i^t + g_m \odot W_m h_i^m + g_g \odot W_g h_i^g + r_i\right)
+$$
+
+### Citation-neighbour scoring
+
+Neighbour candidates are ranked with a weighted structural score:
+
+$$
+s(i,j)=\lambda_d d(j)+\lambda_y e^{-|y_i-y_j|/\tau}+\lambda_r r(i,j)+\lambda_o J(\mathcal{N}_i,\mathcal{N}_j)
+$$
+
+where degree, temporal proximity, reciprocity, and one-hop overlap determine which citation contexts are selected.
+
+### Prototype classifier
+
+The classifier uses cosine-normalised class prototypes:
+
+$$
+\ell_{i,c}=\alpha \cdot \frac{z_i^{\top}p_c}{\lVert z_i\rVert_2\lVert p_c\rVert_2}
+$$
+
+### Semi-supervised objective
+
+Training combines supervised classification, graph-aware contrastive learning, and confidence-filtered pseudo-labels:
+
+$$
+\mathcal{L}=\mathcal{L}_{sup}+\lambda_{ssl}\mathcal{L}_{graph}+\lambda_{pl}\mathcal{L}_{pseudo}
+$$
+
+<p align="center">
+  <img src="images/losses.png" alt="Supervised and pseudo-label training losses" width="95%">
+</p>
+
+---
+
+## Quickstart
+
+### 1. Create the environment
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+For CUDA-heavy runs:
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+```
+
+### 2. Expected data layout
 
 ```text
-[text, metadata, citation] -> residual projection + gate * nonlinear fusion
+data/
+  openalex_ai/
+    documents.csv
+    citations.csv
+  openalex_ai_holdout100/
+    documents.csv
+    citations.csv
+configs/
+  openalex_ai_rtx5090_fast_stable.yaml
+  openalex_ai_rtx5090_mid_1seed.yaml
+runs/
+cache/
+images/
 ```
 
-`NormalizedCosineClassifier` normalizes embeddings and class prototypes, then scales cosine similarities to produce bounded logits.
+### 3. Run a sanity baseline
 
-### 2.6 NeighborhoodAwareContrastiveLoss
+```bash
+python -u scripts/train.py \
+  --config configs/openalex_ai_rtx5090_mid_1seed.yaml \
+  --ablation text_only \
+  --seed 42 \
+  --device cuda
+```
 
-`NeighborhoodAwareContrastiveLoss` is a graph-aware InfoNCE objective. It removes known citation neighbors from negatives, downweights metadata-similar negatives, supports graph positives, and includes numerical safeguards against `log(0)`.
+### 4. Run the full model
 
-### 2.7 PseudoLabeler
+```bash
+python -u scripts/train.py \
+  --config configs/openalex_ai_rtx5090_mid_1seed.yaml \
+  --ablation full \
+  --seed 42 \
+  --device cuda
+```
 
-`PseudoLabeler` supports semi-supervised learning with distribution alignment, probability sharpening, EMA-based class thresholds, warmup blocking, optional minimum per-class acceptance, and persistent `ema_class_max` state.
+---
 
-### 2.8 MetaGraphSci
+## Reproducibility settings
 
-`MetaGraphSci` owns the full model:
+| Symbol | Meaning | Fast | Mid |
+|---|---:|---:|---:|
+| \(E_{MCNA}\) | contrastive neighbour pretraining epochs | 2 | 3 |
+| \(E_{CAPL}\) | supervised and pseudo-label fine-tuning epochs | 12 | 20 |
+| \(E_{total}\) | total optimization budget | 14 | 23 |
+| \(B\) | mini-batch size | 48 | 32 |
+| \(K_{ctx}\) | citation-context neighbours per paper | 6 | 8 |
+| \(L_{max}\) | maximum title-abstract token length | 192 | 256 |
+| \(k_{sel}\) | selected citation neighbours | 4 | 6 |
+| \(k_{lat}\) | latent graph edges per node | 2 | 3 |
+| \(s\) | random seed | 42 | 42 |
+
+---
+
+## Training and evaluation
+
+The supported ablation modes are:
+
+| Ablation | Text | Metadata | Citation | Purpose |
+|---|---:|---:|---:|---|
+| `text_only` | yes | no | no | text baseline |
+| `text_metadata` | yes | yes | no | metadata contribution |
+| `text_citation` | yes | no | yes | graph contribution |
+| `full` | yes | yes | yes | complete model |
+
+Evaluate a holdout split in detached mode:
+
+```bash
+pkill -f "scripts/eval_holdout.py" 2>/dev/null
+mkdir -p runs
+rm -f runs/eval_holdout.log
+
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+nohup bash -c '
+  source .venv/bin/activate
+  python -u scripts/eval_holdout.py \
+      --config configs/openalex_ai_rtx5090_mid_1seed.yaml \
+      --holdout-dir data/openalex_ai_holdout100 \
+      --ablation full --seed 42 --device cuda
+' > runs/eval_holdout.log 2>&1 &
+
+tail -f runs/eval_holdout.log
+```
+
+---
+
+## Results
+
+| Config | Ablation | Accuracy | Micro-F1 | Macro-F1 | Macro-F1 supported | Balanced accuracy | MCC |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Fast | `text_only` | 0.6863 | 0.6863 | 0.4301 | 0.4190 | 0.4346 | 0.6761 |
+| Fast | `full` | 0.6962 | 0.6962 | 0.4550 | 0.4432 | 0.4589 | 0.6866 |
+| Mid | `text_only` | 0.7467 | 0.7467 | 0.5388 | 0.5248 | 0.5330 | 0.7385 |
+| Mid | `text_metadata` | 0.7457 | 0.7457 | 0.5374 | 0.5234 | 0.5314 | 0.7375 |
+| Mid | `full` | **0.7738** | **0.7738** | **0.5750** | **0.5601** | **0.5671** | **0.7666** |
+
+The mid full model improves over fast full by **+0.0777 accuracy** and **+0.1200 macro-F1**, suggesting that the larger configuration improves long-tail behaviour more strongly than overall accuracy.
+
+<p align="center">
+  <img src="images/EmbeddingClasses.jpg" alt="t-SNE projection of transformer embeddings" width="95%">
+</p>
+
+---
+
+## Project structure
 
 ```text
-TextEncoder
-MetadataEncoder
-CitationGraphTransformer
-MultimodalFusion
-NormalizedCosineClassifier
-```
-
-`encode_modalities()` returns `(h_text, h_meta, h_citation)` after ablation masking.  
-`forward()` returns `(embeddings, logits, probabilities)`.  
-`get_embeddings()` returns fused embeddings for contrastive pretraining.
-
----
-
-## 3. Training Pipeline
-
-### 3.1 Data Orchestration
-
-A run builds:
-
-1. documents and citations,
-2. label validation,
-3. train/validation/test splits,
-4. labeled and unlabeled subsets,
-5. graph views,
-6. tokenizers and metadata encoders,
-7. tokenization, embedding, and neighbor caches,
-8. pretrain, labeled, unlabeled, validation, and test datasets.
-
-Labels must be contiguous integers from `0` to `num_classes - 1`.
-
-Graph mode can be:
-
-- `transductive`: validation/test nodes are structurally visible, labels withheld,
-- `inductive`: each split uses only its own graph context.
-
-### 3.2 Training Stages
-
-**Stage 1: Contrastive pretraining.**  
-The model computes anchor embeddings and token-masked positive embeddings. Graph adjacency defines positives, while metadata similarity softens negatives.
-
-**Stage 2: Semi-supervised fine-tuning.**  
-Fine-tuning combines supervised cross-entropy with optional pseudo-label loss:
-
-```text
-loss = supervised_loss + pseudo_weight(epoch) * pseudo_label_loss
-```
-
-Pseudo-labeling starts after supervised warmup and ramps gradually. Best checkpoints are selected on validation metrics such as `macro_f1`.
-
----
-
-## 4. Configuration Reference
-
-### 4.1 Project
-
-```yaml
-project:
-  benchmark: "cs_ai"
-  run_name: "MetaGraphSci_cs_ai_stable"
-  output_dir: "runs/metagraphsci/cs_ai_stable"
-  cache_dir: "cache/metagraphsci/cs_ai"
-```
-
-### 4.2 Caching
-
-```yaml
-caching:
-  tokenization_cache: true
-  doc_embedding_cache: true
-  graph_split_cache: true
-  encoder_cache: true
-  neighbor_cache: true
-```
-
-Invalidate caches when tokenization, graph structure, metadata mappings, context size, sampling strategy, spectral settings, or backbone model changes.
-
-### 4.3 Data
-
-```yaml
-data:
-  documents: "data/cs_ai/documents.csv"
-  citations: "data/cs_ai/citations.csv"
-  label_column: "label"
-  split_strategy: "time"
-  graph_mode: "transductive"
-  label_ratio: 0.25
-  max_seq_length: 256
-  max_context_size: 8
-  k_hops: 2
-  spectral_dim: 0
-  sampling_strategy: "local_relevance"
-```
-
-### 4.4 Model
-
-```yaml
-model:
-  tokenizer_name: "allenai/scibert_scivocab_uncased"
-  text_dim: 768
-  metadata_dim: 256
-  citation_dim: 256
-  fusion_dim: 512
-  metadata_embedding_dim: 64
-  metadata_cross_layers: 2
-  classifier_scale: 8.0
-  peft_mode: "lora"
-  lora_r: 8
-  lora_alpha: 16
-  gradient_checkpointing: true
-  freeze_backbone_until_layer: 6
-  citation_heads: 4
-  citation_layers: 2
-  selector_top_k: 6
-  fusion_modality_dropout: 0.15
-  use_latent_graph: true
-```
-
-### 4.5 Train and Trainer
-
-```yaml
-train:
-  batch_size: 8
-  pretrain_epochs: 3
-  finetune_epochs: 25
-  seeds: [42, 1337, 2025]
-  ablations: ["text_only", "text_metadata", "full"]
-
-trainer:
-  mixed_precision: "bf16"
-  gradient_accumulation_steps: 4
-  pretrain_lr: 1.0e-5
-  finetune_lr: 2.0e-5
-  weight_decay: 0.01
-  max_grad_norm: 1.0
-  selection_metric: "macro_f1"
-  label_smoothing: 0.05
-  lambda_ssl_final: 0.25
-  supervised_warmup_epochs: 5
-  pseudo_ramp_epochs: 8
+configs/                 YAML experiment profiles
+docs/                    extended documentation pages
+scripts/                 training, evaluation, preprocessing, utilities
+src/                     model, losses, data, trainer implementation
+data/                    OpenAlex-AI data and holdout sets
+images/                  architecture and result figures
+runs/                    checkpoints, logs, metrics, predictions
+cache/                   deterministic preprocessing caches
+README.md                project landing page
+references.bib           paper and presentation references
 ```
 
 ---
 
-## 5. Recommended Profiles
+## Documentation
 
-### Tiny / Debug
-
-```yaml
-data:
-  label_ratio: 0.30
-  max_context_size: 2
-  max_seq_length: 128
-
-train:
-  ablations: ["text_only"]
-  batch_size: 4
-  pretrain_epochs: 0
-  finetune_epochs: 3
-
-trainer:
-  lambda_ssl_final: 0.0
-  mixed_precision: "no"
-
-model:
-  freeze_backbone_until_layer: 11
-  use_latent_graph: false
-```
-
-### Smoke Test
-
-```yaml
-train:
-  ablations: ["text_only", "full"]
-  pretrain_epochs: 1
-  finetune_epochs: 5
-
-trainer:
-  lambda_ssl_final: 0.0
-```
-
-### Full Experiment
-
-```yaml
-train:
-  seeds: [42, 1337, 2025]
-  ablations: ["text_only", "text_metadata", "full"]
-  pretrain_epochs: 5
-  finetune_epochs: 30
-
-trainer:
-  lambda_ssl_final: 0.25
-  supervised_warmup_epochs: 5
-  pseudo_ramp_epochs: 8
-```
-
----
-
-## 6. Random Accuracy Debugging Checklist
-
-If macro F1 is near random:
-
-1. Run `text_only` first.
-2. Disable pseudo-labeling.
-3. Increase `label_ratio`.
-4. Verify contiguous integer labels.
-5. Verify every class appears in the labeled split.
-6. Overfit 32 examples.
-7. Reduce `classifier_scale`.
-8. Reduce `max_context_size`.
-9. Disable graph modules with `text_only`.
-10. Check macro F1, not only accuracy.
-
----
-
-## 7. Hyperparameter Sensitivity Summary
-
-| Hyperparameter | Risk if too low | Risk if too high | Start |
-|---|---|---|---|
-| `label_ratio` | Missing class labels | More labeling cost | `0.20-0.25` |
-| `max_seq_length` | Truncates abstracts | OOM / slow | `256` |
-| `max_context_size` | Weak graph signal | noisy context / OOM | `8` |
-| `classifier_scale` | weak gradients | overconfident logits | `8.0` |
-| `pretrain_lr` | slow contrastive learning | collapse | `1e-5` |
-| `finetune_lr` | slow convergence | forgetting | `2e-5` |
-| `lambda_ssl_final` | no SSL benefit | noisy pseudo-labels | `0.15-0.25` |
-| `contrastive_temperature` | unstable if very low | weak separation | `0.10` |
-| `metadata_cross_layers` | weak interactions | fp16 instability | `2-3` |
-| `citation_layers` | shallow graph reasoning | oversmoothing | `2` |
-| `fusion_modality_dropout` | modality overreliance | underfitting | `0.10-0.20` |
+| Page | Description |
+|---|---|
+| [Overview](docs/01-overview.md) | what the pipeline produces and why the cache design matters |
+| [Architecture](docs/02-architecture.md) | layered implementation view and modality formulas |
+| [Quickstart](docs/03-quickstart.md) | local setup, dataset download, cache build, smoke test |
+| [Datasets](docs/04-datasets.md) | Cora, PubMed, OGBN-Arxiv, FoRC, and OpenAlex support |
+| [Cache layer](docs/05-cache-layer.md) | tokenization, embedding, encoder, graph, and neighbour caches |
+| [Experiments](docs/06-experiments.md) | ablation order, metrics, plots, evaluation bundles |
+| [Inspection](docs/07-model-inspection.md) | model debugging and pseudo-label checks |
+| [API](docs/08-public-module-api.md) | public classes and responsibilities |
+| [Results](docs/09-results-and-artifacts.md) | expected metrics, plots, predictions, and run context |
+| [Configuration](docs/10-configuration.md) | suggested YAML groups and consistency checks |
+| [Troubleshooting](docs/11-troubleshooting.md) | common runtime, shape, and numerical issues |
+| [Roadmap](docs/12-roadmap.md) | next implementation tasks |
 
 ---
 
 <div align="center">
 
-**Text-aware. Metadata-aware. Citation-aware. Reproducible scientific document classification.**
-
-⭐ Star the repository if this project helps your work.
+**Reproducible multimodal classification with text, metadata, and citation context.**
 
 </div>

@@ -1,78 +1,74 @@
-# Architecture, layers, and main components
+# Architecture, layers, and formulas
 
 [Previous](./01-overview.md) · [Index](./00-index.md) · [Next](./03-quickstart.md)
 
 ---
 
-## :building_construction: Architecture
+## Layered architecture
 
-The pipeline is split so that each failure can be traced to a specific layer. If batched tensors look wrong, the problem is not automatically "the dataset." It may be label encoding, the citation file, the graph mode, the neighbour scoring weights, the tokenizer, or the frozen encoder.
-
-### Layered view
+The implementation is split so that each failure can be traced to a specific layer: labels, citation edges, graph mode, neighbour scoring, tokenizer, frozen encoder, dataset wrapper, or model fusion.
 
 ```text
-                  ┌──────────────────────────────────────────────────┐
-                  │ download.py + downloaders.py                     │
-  raw corpora ──> │ OpenAlex / OGBN-Arxiv / FoRC / Cora / PubMed     │ ──> data/<dataset>/{documents,citations}.csv + config.yaml
-                  └──────────────────────────────────────────────────┘
-                                       │
-                                       ▼
-                  ┌──────────────────────────────────────────────────┐
-                  │ tabular_utils.py                                 │
-                  │ load_documents, prepare_documents,               │
-                  │ split_documents, create_low_label_split          │
-                  └──────────────────────────────────────────────────┘
-                                       │
-                                       ▼
-       ┌─────────────────────────────────────────────────────────────┐
-       │ Cache layer (each file: build, save, load, load-or-build)   │
-       │                                                             │
-       │  encoder_cache       venue / publisher / author vocab       │
-       │  tokenization_cache  per-doc input_ids + attention_mask     │
-       │  embedding_cache     frozen-encoder document vectors        │
-       │  graph_cache         edge index + per-stage subgraphs       │
-       │  context_caching     ranked neighbour records (centers)     │
-       │                                                             │
-       │  shared via cache_utils.py:                                 │
-       │    docs_fingerprint, per_doc_hashes, edge_set_fingerprint,  │
-       │    metadata_matches, write_meta_sidecar, ...                │
-       └─────────────────────────────────────────────────────────────┘
-                                       │
-                                       ▼
-                  ┌──────────────────────────────────────────────────┐
-                  │ dataset.py                                       │
-                  │ MultiScaleDocumentDataset + build_loader         │
-                  └──────────────────────────────────────────────────┘
-                                       │
-                                       ▼
-                              PyTorch training loop
+raw corpora
+  -> downloaders and schema normalisation
+  -> tabular loading, label encoding, and splits
+  -> cache layer
+  -> MultiScaleDocumentDataset
+  -> MetaGraphSci training loop
 ```
 
-### Main components
+<p align="center">
+  <img src="../images/graph-encoder.png" alt="Citation graph transformer" width="95%">
+</p>
 
-| Component | What it does |
+## Main components
+
+| Component | Responsibility |
 |---|---|
-| `download.py` | CLI entry point: parses args, validates, prints summary, delegates. |
-| `downloaders.py` | Per-source fetch + normalisation (Planetoid, OGBN-Arxiv, FoRC2025, OpenAlex). |
-| `download_utils.py` | Schema normalisation, YAML config generation, generic table I/O. |
-| `tabular_utils.py` | Document loading, label encoding, train/val/test splits, low-label split. |
-| `graph_utils.py` | Edge-list loading, dense remapping, adjacency dicts, subgraph extraction. |
-| `cache_utils.py` | Shared hashing, fingerprinting, compatibility checks, sidecar I/O. |
-| `tokenization_cache.py` | Incremental tokenisation cache keyed on per-doc content hashes. |
-| `embedding_cache.py` | Incremental embedding cache keyed on tokenizer + model settings. |
-| `encoder_cache.py` | Vocabulary cache for venue, publisher, and author IDs. |
-| `graph_cache.py` | Citation graph + per-stage split views, keyed on edges + split params. |
-| `context_caching.py` | Neighbour cache: BFS hops, spectral features, structural scoring. |
-| `dataset.py` | PyTorch Dataset that turns one center doc + cached context into tensors. |
+| `download.py` | CLI entry point for dataset acquisition. |
+| `downloaders.py` | Source-specific fetch and normalisation. |
+| `tabular_utils.py` | document loading, label encoding, train/val/test splits. |
+| `cache_utils.py` | fingerprints, compatibility checks, sidecar metadata. |
+| `tokenization_cache.py` | incremental token cache keyed by document content. |
+| `embedding_cache.py` | frozen encoder vectors keyed by model and content. |
+| `encoder_cache.py` | metadata vocabularies built from training documents. |
+| `graph_cache.py` | citation graph and split-specific subgraphs. |
+| `context_caching.py` | ranked neighbour records. |
+| `dataset.py` | tensor assembly and DataLoader integration. |
 
-The key design choice is to keep raw data, structural features, text features, and final tensors in separate caches. You should be able to rebuild any one of them without rebuilding the others.
+## Modality encoders
 
-> [!TIP]
-> Debug from left to right. Documents and labels first, graph second, structural features third, text features fourth, dataset last.
+For document \(i\), MetaGraphSci builds three representations:
 
-### Cache invalidation in one sentence
+$$
+h_i^{t}=f_t(x_i^{title},x_i^{abstract}), \qquad
+h_i^{m}=f_m(v_i,p_i,a_i,y_i), \qquad
+h_i^{g}=f_g(i,\mathcal{N}_i,\mathcal{E}_i)
+$$
 
-Each cache stores a sidecar with a content-aware fingerprint. On load, the fingerprint is compared against what the current run would produce: if every relevant field matches, the cache is reused; otherwise only the changed documents are rebuilt.
+<p align="center">
+  <img src="../../images/text-encoder.png" alt="Text encoder" width="48%">
+  <img src="../../images/metadata-encoder.png" alt="Metadata encoder" width="48%">
+</p>
+
+## Gated residual fusion
+
+The fusion block combines projected modality vectors with learned gates:
+
+$$
+z_i = \operatorname{Norm}\left(g_t \odot W_t h_i^t + g_m \odot W_m h_i^m + g_g \odot W_g h_i^g + r_i\right)
+$$
+
+This keeps the representation stable when metadata or citation branches are ablated.
+
+## Classifier head
+
+Class logits are computed against learnable prototypes:
+
+$$
+\ell_{i,c}=\alpha \cdot \cos(z_i,p_c)
+      = \alpha \cdot \frac{z_i^{\top}p_c}{\lVert z_i\rVert_2\lVert p_c\rVert_2}
+$$
 
 ---
 

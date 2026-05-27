@@ -4,69 +4,40 @@
 
 ---
 
-## :mag: Model inspection
-
-The uploaded MetaGraphSci code does not include a web playground or frontend.  
-This section therefore documents model-level inspection only.
-
 ## What to inspect
 
-Useful inspection points are:
+Useful inspection points are text encoder output, metadata encoder output, citation encoder output, ablated tensors, fused embedding, classifier logits, probabilities, pseudo-label thresholds, and exported evaluation plots.
 
-1. Text encoder output.
-2. Metadata encoder output.
-3. Citation encoder output.
-4. Ablated modality tensors.
-5. Fused multimodal embedding.
-6. Classifier logits and probabilities.
-7. Pseudo-label confidence thresholds.
-8. Evaluation plots and prediction tables.
+<p align="center">
+  <img src="../../images/EmbeddingClasses.jpg" alt="Embedding class clusters" width="95%">
+</p>
 
 ## Forward-pass inspection
 
-For debugging, inspect the output of:
-
 ```python
 h_text, h_meta, h_citation = model.encode_modalities(...)
-```
-
-Then compare:
-
-```python
 fused, logits, probs = model(...)
 ```
 
-If `return_parts=True` is supported in the local version, use it to inspect intermediate modality representations.
+If `return_parts=True` is supported locally, use it to inspect intermediate representations.
 
-## Ablation inspection
-
-Ablation should verify that the correct modalities are zeroed:
+## Ablation sanity check
 
 ```text
-text_only      -> metadata=0, citation=0
-text_metadata  -> citation=0
-text_citation  -> metadata=0
+text_only      -> metadata = 0, citation = 0
+text_metadata  -> citation = 0
+text_citation  -> metadata = 0
 full           -> no modality is zeroed
 ```
 
-## Pseudo-label inspection
+## Logit check
 
-For semi-supervised runs, inspect:
+For a batch with \(B\) samples and \(C\) classes, logits should have shape:
 
-- adjusted probabilities,
-- pseudo-labels,
-- confidence values,
-- per-class adaptive thresholds,
-- kept/rejected pseudo-label mask.
+$$
+\ell \in \mathbb{R}^{B \times C}
+$$
 
-## Not present in current code
+---
 
-The uploaded code does not show:
-
-- a browser-based playground,
-- FastAPI endpoints,
-- interactive prompt viewer,
-- RAG-mode UI,
-- citation chips.
-
-Those should not be documented as existing features unless their code is added.
+[Previous](./06-experiments.md) · [Index](./00-index.md) · [Next](./08-public-module-api.md)
