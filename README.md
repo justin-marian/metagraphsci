@@ -11,6 +11,8 @@
   <img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-2.x-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white">
   <img alt="PyG" src="https://img.shields.io/badge/PyTorch%20Geometric-graph%20learning-3B82F6?style=for-the-badge">
   <img alt="Transformers" src="https://img.shields.io/badge/HuggingFace-Transformers-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-RunPod%20ready-2496ED?style=for-the-badge&logo=docker&logoColor=white">
+  <img alt="CUDA" src="https://img.shields.io/badge/CUDA-12.4-76B900?style=for-the-badge&logo=nvidia&logoColor=white">
 </p>
 <p>
   <img alt="SciBERT" src="https://img.shields.io/badge/SciBERT-AllenAI-4F46E5?style=flat-square">
@@ -25,6 +27,8 @@
   <a href="#architecture"><b>Architecture</b></a> ·
   <a href="#core-idea-in-formulas"><b>Formulas</b></a> ·
   <a href="#quickstart"><b>Quickstart</b></a> ·
+  <a href="#configuration-profiles"><b>Configs</b></a> ·
+  <a href="#docker-and-runpod"><b>Docker</b></a> ·
   <a href="#results"><b>Results</b></a> ·
   <a href="#documentation"><b>Docs</b></a>
 </p>
@@ -91,7 +95,7 @@ $$
 The fused representation is a gated residual combination:
 
 $$
-z_i = \operatorname{Norm}\left(g_t \odot W_t h_i^t + g_m \odot W_m h_i^m + g_g \odot W_g h_i^g + r_i\right)
+z_i = \mathrm{normalize}\left(g_t \odot W_t h_i^t + g_m \odot W_m h_i^m + g_g \odot W_g h_i^g + r_i\right)
 $$
 
 ### Citation-neighbour scoring
@@ -148,14 +152,16 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```text
 data/
   openalex_ai/
-    documents.csv
-    citations.csv
+    documents.parquet
+    citations.parquet
+    baselines.parquet
   openalex_ai_holdout100/
-    documents.csv
-    citations.csv
+    documents.parquet
+    citations.parquet
 configs/
   openalex_ai_rtx5090_fast_stable.yaml
-  openalex_ai_rtx5090_mid_1seed.yaml
+  openalex_ai_rtx6000_ada_fast_stable.yaml
+Dockerfile
 runs/
 cache/
 images/
@@ -176,6 +182,141 @@ python -u scripts/train.py \
 ```bash
 python -u scripts/train.py \
   --config configs/openalex_ai_rtx5090_mid_1seed.yaml \
+  --ablation full \
+  --seed 42 \
+  --device cuda
+```
+
+---
+
+## Configuration profiles
+
+The repository is driven by YAML experiment profiles stored in `configs/`. A profile defines the benchmark, cache paths, dataset files, graph construction parameters, encoder dimensions, LoRA settings, ablations, optimizer settings, and pseudo-label schedule.
+
+Recommended profiles:
+
+| Config | Target hardware | Main use | Notes |
+|---|---|---|---|
+| `configs/openalex_ai_rtx5090_fast_stable.yaml` | local RTX 5090 class GPU | fast reproducible OpenAlex-AI run | `batch_size=48`, `num_workers=8`, `max_seq_length=192`, `max_context_size=6` |
+| `configs/openalex_ai_rtx6000_ada_fast_stable.yaml` | RunPod RTX 6000 Ada pod | cloud training | same model settings, `num_workers=6` for safer pod I/O |
+
+Both profiles use the same core setup: time-based splits, transductive citation graph mode, SciBERT tokenization, LoRA adaptation, gradient checkpointing, gated multimodal fusion, and the `text_only` plus `full` ablations.
+
+Minimal profile structure:
+
+```yaml
+project:
+  benchmark: openalex_ai
+  run_name: MetaGraphSci_openalex_ai_rtx5090_fast_stable
+  output_dir: runs/openalex_ai_rtx5090_fast_stable
+  cache_dir: cache/openalex_ai
+
+data:
+  documents: data/openalex_ai/documents.parquet
+  citations: data/openalex_ai/citations.parquet
+  baselines: data/openalex_ai/baselines.parquet
+  split_strategy: time
+  graph_mode: transductive
+  max_context_size: 6
+  max_seq_length: 192
+
+model:
+  tokenizer_name: allenai/scibert_scivocab_uncased
+  peft_mode: lora
+  lora_r: 8
+  lora_alpha: 16
+  gradient_checkpointing: true
+  freeze_backbone_until_layer: 6
+  fusion_dim: 512
+  use_latent_graph: true
+
+train:
+  batch_size: 48
+  pretrain_epochs: 2
+  finetune_epochs: 12
+  seeds: [42]
+  ablations: [text_only, full]
+
+trainer:
+  mixed_precision: bf16
+  selection_metric: macro_f1
+  lambda_ssl_final: 0.25
+```
+
+> [!TIP]
+> Keep `output_dir`, `cache_dir`, and `run_name` unique per hardware/profile. This avoids overwriting checkpoints or mixing cache metadata between local and RunPod runs.
+
+---
+
+## Docker and RunPod
+
+The project can be trained inside a RunPod-ready NVIDIA container. The Docker image uses the official PyTorch runtime with CUDA 12.4 and cuDNN 9, installs the non-Torch dependencies from `requirements.txt`, installs the repository in editable mode, and starts `scripts/train_nvidia.sh` by default.
+
+```dockerfile
+FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/workspace/.cache/huggingface \
+    TRANSFORMERS_CACHE=/workspace/.cache/huggingface \
+    TORCH_HOME=/workspace/.cache/torch \
+    MLFLOW_TRACKING_URI=/workspace/mlruns
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl ca-certificates build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace/metagraphsci
+
+COPY requirements.txt ./requirements.txt
+RUN sed -i '/^torch$/d;/^torchvision$/d' requirements.txt && \
+    pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+COPY . .
+RUN pip install -e .
+
+CMD ["bash", "scripts/train_nvidia.sh"]
+```
+
+Build locally:
+
+```bash
+docker build -t metagraphsci:cuda12.4 .
+```
+
+Run with a mounted workspace/cache:
+
+```bash
+docker run --gpus all --rm -it \
+  -v "$PWD/data:/workspace/metagraphsci/data" \
+  -v "$PWD/runs:/workspace/metagraphsci/runs" \
+  -v "$PWD/cache:/workspace/metagraphsci/cache" \
+  metagraphsci:cuda12.4
+```
+
+Override the default command for a specific config:
+
+```bash
+docker run --gpus all --rm -it metagraphsci:cuda12.4 \
+  bash -lc "python -u scripts/train.py \
+    --config configs/openalex_ai_rtx6000_ada_fast_stable.yaml \
+    --ablation full --seed 42 --device cuda"
+```
+
+For RunPod, use the same image and set the container start command to:
+
+```bash
+bash scripts/train_nvidia.sh
+```
+
+or run a specific cloud profile:
+
+```bash
+python -u scripts/train.py \
+  --config configs/openalex_ai_rtx6000_ada_fast_stable.yaml \
   --ablation full \
   --seed 42 \
   --device cuda
@@ -252,8 +393,9 @@ The mid full model improves over fast full by **+0.0777 accuracy** and **+0.1200
 ## Project structure
 
 ```text
-configs/                 YAML experiment profiles
-docs/                    extended documentation pages
+configs/                 YAML experiment profiles for local and RunPod runs
+Dockerfile               CUDA 12.4 / PyTorch 2.4.1 RunPod-ready image
+docs/base/                    extended documentation pages
 scripts/                 training, evaluation, preprocessing, utilities
 src/                     model, losses, data, trainer implementation
 data/                    OpenAlex-AI data and holdout sets
@@ -270,18 +412,18 @@ references.bib           paper and presentation references
 
 | Page | Description |
 |---|---|
-| [Overview](docs/01-overview.md) | what the pipeline produces and why the cache design matters |
-| [Architecture](docs/02-architecture.md) | layered implementation view and modality formulas |
-| [Quickstart](docs/03-quickstart.md) | local setup, dataset download, cache build, smoke test |
-| [Datasets](docs/04-datasets.md) | Cora, PubMed, OGBN-Arxiv, FoRC, and OpenAlex support |
-| [Cache layer](docs/05-cache-layer.md) | tokenization, embedding, encoder, graph, and neighbour caches |
-| [Experiments](docs/06-experiments.md) | ablation order, metrics, plots, evaluation bundles |
-| [Inspection](docs/07-model-inspection.md) | model debugging and pseudo-label checks |
-| [API](docs/08-public-module-api.md) | public classes and responsibilities |
-| [Results](docs/09-results-and-artifacts.md) | expected metrics, plots, predictions, and run context |
-| [Configuration](docs/10-configuration.md) | suggested YAML groups and consistency checks |
-| [Troubleshooting](docs/11-troubleshooting.md) | common runtime, shape, and numerical issues |
-| [Roadmap](docs/12-roadmap.md) | next implementation tasks |
+| [Overview](docs/base/01-overview.md) | what the pipeline produces and why the cache design matters |
+| [Architecture](docs/base/02-architecture.md) | layered implementation view and modality formulas |
+| [Quickstart](docs/base/03-quickstart.md) | local setup, dataset download, cache build, smoke test |
+| [Datasets](docs/base/04-datasets.md) | Cora, PubMed, OGBN-Arxiv, FoRC, and OpenAlex support |
+| [Cache layer](docs/base/05-cache-layer.md) | tokenization, embedding, encoder, graph, and neighbour caches |
+| [Experiments](docs/base/06-experiments.md) | ablation order, metrics, plots, evaluation bundles |
+| [Inspection](docs/base/07-model-inspection.md) | model debugging and pseudo-label checks |
+| [API](docs/base/08-public-module-api.md) | public classes and responsibilities |
+| [Results](docs/base/09-results-and-artifacts.md) | expected metrics, plots, predictions, and run context |
+| [Configuration](docs/base/10-configuration.md) | YAML profiles, hardware-specific settings, and consistency checks |
+| [Troubleshooting](docs/base/11-troubleshooting.md) | common runtime, shape, and numerical issues |
+| [Roadmap](docs/base/12-roadmap.md) | next implementation tasks |
 
 ---
 
