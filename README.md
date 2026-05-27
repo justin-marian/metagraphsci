@@ -84,27 +84,27 @@ raw corpora
 
 ### Multimodal fusion
 
-For a paper \(i\), the three encoders produce text, metadata, and citation representations:
+For a paper $i$, the three encoders produce text, metadata, and citation representations:
 
-$$
+$
 h_i^{t}=f_t(x_i^{title},x_i^{abstract}), \qquad
 h_i^{m}=f_m(v_i,p_i,a_i,y_i), \qquad
 h_i^{g}=f_g(i,\mathcal{N}_i,\mathcal{E}_i)
-$$
+$
 
 The fused representation is a gated residual combination:
 
-$$
+$
 z_i = \mathrm{normalize}\left(g_t \odot W_t h_i^t + g_m \odot W_m h_i^m + g_g \odot W_g h_i^g + r_i\right)
-$$
+$
 
 ### Citation-neighbour scoring
 
 Neighbour candidates are ranked with a weighted structural score:
 
-$$
+$
 s(i,j)=\lambda_d d(j)+\lambda_y e^{-|y_i-y_j|/\tau}+\lambda_r r(i,j)+\lambda_o J(\mathcal{N}_i,\mathcal{N}_j)
-$$
+$
 
 where degree, temporal proximity, reciprocity, and one-hop overlap determine which citation contexts are selected.
 
@@ -112,17 +112,17 @@ where degree, temporal proximity, reciprocity, and one-hop overlap determine whi
 
 The classifier uses cosine-normalised class prototypes:
 
-$$
+$
 \ell_{i,c}=\alpha \cdot \frac{z_i^{\top}p_c}{\lVert z_i\rVert_2\lVert p_c\rVert_2}
-$$
+$
 
 ### Semi-supervised objective
 
 Training combines supervised classification, graph-aware contrastive learning, and confidence-filtered pseudo-labels:
 
-$$
+$
 \mathcal{L}=\mathcal{L}_{sup}+\lambda_{ssl}\mathcal{L}_{graph}+\lambda_{pl}\mathcal{L}_{pseudo}
-$$
+$
 
 <p align="center">
   <img src="images/losses.png" alt="Supervised and pseudo-label training losses" width="95%">
@@ -328,15 +328,15 @@ python -u scripts/train.py \
 
 | Symbol | Meaning | Fast | Mid |
 |---|---:|---:|---:|
-| \(E_{MCNA}\) | contrastive neighbour pretraining epochs | 2 | 3 |
-| \(E_{CAPL}\) | supervised and pseudo-label fine-tuning epochs | 12 | 20 |
-| \(E_{total}\) | total optimization budget | 14 | 23 |
-| \(B\) | mini-batch size | 48 | 32 |
-| \(K_{ctx}\) | citation-context neighbours per paper | 6 | 8 |
-| \(L_{max}\) | maximum title-abstract token length | 192 | 256 |
-| \(k_{sel}\) | selected citation neighbours | 4 | 6 |
-| \(k_{lat}\) | latent graph edges per node | 2 | 3 |
-| \(s\) | random seed | 42 | 42 |
+| $E_{MCNA}$ | contrastive neighbour pretraining epochs | 2 | 3 |
+| $E_{CAPL}$ | supervised and pseudo-label fine-tuning epochs | 12 | 20 |
+| $E_{total}$ | total optimization budget | 14 | 23 |
+| $B$ | mini-batch size | 48 | 32 |
+| $K_{ctx}$ | citation-context neighbours per paper | 6 | 8 |
+| $L_{max}$ | maximum title-abstract token length | 192 | 256 |
+| $k_{sel}$ | selected citation neighbours | 4 | 6 |
+| $k_{lat}$ | latent graph edges per node | 2 | 3 |
+| $s$ | random seed | 42 | 42 |
 
 ---
 
