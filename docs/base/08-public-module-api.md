@@ -4,126 +4,41 @@
 
 ---
 
-## :zap: API
+## API scope
 
-The uploaded MetaGraphSci code exposes Python modules and classes, not an HTTP API.
+MetaGraphSci exposes Python modules and classes.
 
-## Main model
+## Main classes
 
-```python
-MetaGraphSci(...)
-```
+| Class | Responsibility |
+|---|---|
+| `MetaGraphSci` | encode modalities, fuse branches, classify documents, run ablations |
+| `TextEncoder` | SciBERT-compatible text representation with optional PEFT |
+| `MetadataEncoder` | venue, publisher, author, and year representation |
+| `CitationGraphTransformer` | relation-aware citation context encoding |
+| `MultimodalFusion` | gated residual fusion of text, metadata, and citation streams |
+| `NormalizedCosineClassifier` | prototype-based cosine classifier |
+| `NeighborhoodAwareContrastiveLoss` | graph-aware contrastive objective |
+| `PseudoLabeler` | confidence-filtered pseudo-label selection |
 
-Main responsibilities:
-
-- encode text with a SciBERT-based text encoder,
-- encode publication metadata,
-- encode citation context,
-- fuse text, metadata, and citation streams,
-- classify documents using normalized cosine prototypes,
-- support modality ablations.
-
-Important methods:
+## Main flow
 
 ```python
-encode_modalities(...)
-forward(...)
-ablation_study(...)
-```
-
-## Text encoder
-
-```python
-TextEncoder(...)
-```
-
-Responsibilities:
-
-- load a SciBERT-compatible backbone,
-- optionally apply LoRA or QLoRA,
-- optionally enable gradient checkpointing,
-- optionally freeze lower transformer layers,
-- return a projected document representation.
-
-## Metadata encoder
-
-```python
-MetadataEncoder(...)
-```
-
-Responsibilities:
-
-- embed venue IDs,
-- embed publisher IDs,
-- pool author embeddings,
-- encode publication year,
-- model explicit feature interactions through a deep cross network.
-
-## Citation graph encoder
-
-```python
-CitationGraphTransformer(...)
-```
-
-Responsibilities:
-
-- select informative citation-context candidates,
-- encode structural position information,
-- mix relation-aware attention biases,
-- combine global attention with local graph message passing,
-- optionally use learned latent adjacency.
-
-## Fusion and classifier heads
-
-```python
-MultimodalFusion(...)
-NormalizedCosineClassifier(...)
-```
-
-Responsibilities:
-
-- fuse text, metadata, and citation streams through gated residual fusion,
-- randomly drop metadata/citation streams during training when modality dropout is enabled,
-- classify using normalized cosine similarity against learnable class prototypes.
-
-## Losses
-
-```python
-NeighborhoodAwareContrastiveLoss(...)
-```
-
-Responsibilities:
-
-- normalize embeddings,
-- compute temperature-scaled similarity,
-- mask known graph neighbors to reduce false negatives,
-- soften metadata-related negatives,
-- support custom positive masks.
-
-## Pseudo-labeling
-
-```python
-PseudoLabeler(...)
-```
-
-Responsibilities:
-
-- align predictions to a target prior,
-- sharpen probabilities,
-- maintain adaptive per-class confidence thresholds,
-- select pseudo-labels after warmup,
-- save and restore adaptive state.
-
-## Evaluation utilities
-
-```python
-evaluate_predictions(...)
+model = MetaGraphSci(...)
+h_text, h_meta, h_citation = model.encode_modalities(...)
+logits = model(...)
+metrics = evaluate_predictions(y_true, y_pred, y_prob)
 save_evaluation_bundle(...)
 ```
 
-Responsibilities:
+## Probability output
 
-- compute aggregate metrics,
-- compute per-class metrics,
-- save prediction tables,
-- export diagnostic plots and optional training-history artifacts.
+Predicted probabilities should satisfy:
+
+$$
+\hat{p}_{i,c}=\frac{\exp(\ell_{i,c})}{\sum_{k=1}^{C}\exp(\ell_{i,k})}, \qquad \sum_{c=1}^{C}\hat{p}_{i,c}=1
+$$
+
+---
+
+[Previous](./07-model-inspection.md) · [Index](./00-index.md) · [Next](./09-results-and-artifacts.md)
