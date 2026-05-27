@@ -1,0 +1,103 @@
+project:
+  benchmark: forc4cl
+  run_name: MetaGraphSci_forc4cl_rtx5090_mid_1seed_stable
+  output_dir: runs/forc4cl_rtx5090_mid_1seed_stable
+  cache_dir: cache/forc4cl
+caching:
+  tokenization_cache: true
+  doc_embedding_cache: true
+  graph_split_cache: true
+  encoder_cache: true
+  neighbor_cache: true
+data:
+  documents: data/forc4cl/documents.csv
+  citations: data/forc4cl/citations.csv
+  baselines: data/forc4cl/baselines.csv
+  label_column: label
+  source_col: source
+  target_col: target
+  split_strategy: time
+  graph_mode: transductive
+  label_ratio: 0.25
+  test_size: 0.2
+  val_size: 0.1
+  max_context_size: 8
+  sampling_strategy: local_relevance
+  connectivity_weight: 0.45
+  temporal_weight: 0.25
+  reciprocity_weight: 0.1
+  overlap_weight: 0.2
+  k_hops: 2
+  cache_n_jobs: -1
+  spectral_dim: 0
+  enable_spectral: false
+  max_seq_length: 256
+  max_authors: null
+  cache_text: true
+  pretokenize_context: true
+  hub_degree_threshold: 0
+  max_graph_nodes_for_hops: 5000
+model:
+  tokenizer_name: allenai/scibert_scivocab_uncased
+  text_dim: 768
+  metadata_dim: 256
+  citation_dim: 256
+  fusion_dim: 512
+  classifier_scale: 8.0
+  metadata_embedding_dim: 64
+  metadata_cross_layers: 2
+  peft_mode: lora
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.1
+  gradient_checkpointing: true
+  freeze_backbone_until_layer: 6
+  citation_heads: 4
+  citation_layers: 2
+  citation_ff_dim: 512
+  selector_hidden_dim: 256
+  selector_top_k: 6
+  citation_dropout: 0.15
+  fusion_modality_dropout: 0.15
+  use_latent_graph: true
+  latent_graph_top_k: 3
+  hybrid_alpha_init: -2.0
+train:
+  batch_size: 32
+  num_workers: 8
+  pretrain_epochs: 3
+  finetune_epochs: 20
+  seeds:
+  - 42
+  ablations:
+  - text_only
+  - text_metadata
+  - full
+trainer:
+  mixed_precision: bf16
+  gradient_accumulation_steps: 1
+  pretrain_lr: 1.0e-05
+  finetune_lr: 2.0e-05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  lr_warmup_fraction: 0.08
+  selection_metric: macro_f1
+  label_smoothing: 0.05
+  lambda_ssl: 0.0
+  lambda_ssl_final: 0.25
+  supervised_warmup_epochs: 5
+  pseudo_ramp_epochs: 8
+  min_pseudo_confidence: 0.7
+  contrastive_temperature: 0.1
+  metadata_negative_weight: 0.25
+  ssl_text_dropout: 0.1
+  pseudo_label:
+    beta: 0.9
+    temperature: 0.75
+    warmup_epochs: 5
+    min_per_class: 0
+    ema_momentum: 0.98
+    distributionalignment: false
+  use_mlflow: false
+  mlflow_experiment: MetaGraphSci_forc4cl
+  use_wandb: false

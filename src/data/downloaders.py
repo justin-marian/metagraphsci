@@ -9,7 +9,9 @@ FoRC2025, and REST-based OpenAlex slices.
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 import shutil
 import socket
 import time
@@ -19,17 +21,20 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import polars as pl
+import torch
 from ogb.nodeproppred import NodePropPredDataset
 from torch_geometric.datasets import Planetoid
 
-from .constants import FORC2025_URL
+from .constants import (
+    CORA_RAW_TEXTS_URL, FORC2025_URL, OGBN_ARXIV_TITLEABS_URL,
+    PUBMED_RAW_TEXTS_URL)
 from .download_utils import (
     download_file, empty_citations, ensure_required_columns, extract_zip,
-    find_candidates, mask_to_split, read_table, save_benchmark_config,
-    save_dataset_bundle, save_frame)
+    mask_to_split, read_table, save_benchmark_config, save_dataset_bundle,
+    save_frame)
 
 OPENALEX_API_URL = "https://api.openalex.org/works"
 OPENALEX_SELECT = (
@@ -66,12 +71,47 @@ def download_openalex_query(
         papers_per_class=papers_per_class, classes=classes, domain=domain)
 
 
+def _load_ogbn_arxiv_titleabs(raw_dir: Path) -> pl.DataFrame | None:
+    """
+    Fetch and parse OGB's titleabs.tsv.gz mapping MAG paper_id -> (title, abstract).
+
+    OGB's `ogbn-arxiv` ships only precomputed skip-gram node features, not raw text.
+    Without this join, every document has empty title/abstract and any text-based
+    encoder learns nothing.
+    """
+    tsv_path = raw_dir / "titleabs.tsv.gz"
+    if not tsv_path.exists():
+        try:
+            download_file(OGBN_ARXIV_TITLEABS_URL, tsv_path)
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"[ogbn_arxiv] Warning: could not fetch titleabs.tsv.gz ({exc}); "
+                  "title/abstract will be empty.")
+            return None
+
+    df = pl.read_csv(
+        tsv_path, separator="\t", has_header=False,
+        new_columns=["paper_id", "title", "abstract"],
+        infer_schema_length=0, truncate_ragged_lines=True, quote_char=None)
+    # Some releases include a header row; drop it if present.
+    if df.height and df["paper_id"][0] == "paper id":
+        df = df.slice(1)
+    return (df.with_columns(pl.col("paper_id").cast(pl.Int64, strict=False))
+              .drop_nulls(subset=["paper_id"]))
+
+
 def download_ogbn_arxiv(out_dir: str | Path, config_template: str | Path) -> None:
     """Download OGBN-Arxiv and export it in the project layout."""
     # OGBN-Arxiv provides explicit temporal splits. Preserve them to avoid
     # leakage from future papers into past-paper prediction.
     out = Path(out_dir)
-    dataset = NodePropPredDataset(name="ogbn-arxiv", root=str(out / "raw"))
+    # PyTorch 2.6 made torch.load default to weights_only=True; OGB's cached
+    # .pt files contain pickled numpy objects and fail under that mode.
+    _orig_torch_load = torch.load
+    torch.load = lambda *a, **kw: _orig_torch_load(*a, **{**kw, "weights_only": False})
+    try:
+        dataset = NodePropPredDataset(name="ogbn-arxiv", root=str(out / "raw"))
+    finally:
+        torch.load = _orig_torch_load
     graph, labels = dataset[0]
     split_idx = dataset.get_idx_split()
     num_nodes = int(graph["num_nodes"])
@@ -84,16 +124,52 @@ def download_ogbn_arxiv(out_dir: str | Path, config_template: str | Path) -> Non
     for idx in split_idx["test"].reshape(-1).tolist():
         split[int(idx)] = "test"
 
+    titles = [""] * num_nodes
+    abstracts = [""] * num_nodes
+    mapping_path = out / "raw" / "ogbn_arxiv" / "mapping" / "nodeidx2paperid.csv.gz"
+    titleabs = _load_ogbn_arxiv_titleabs(out / "raw" / "ogbn_arxiv")
+    if titleabs is not None and mapping_path.exists():
+        node2paper = (pl.read_csv(mapping_path)
+                        .rename({"node idx": "doc_id", "paper id": "paper_id"}))
+        joined = (node2paper.join(titleabs, on="paper_id", how="left")
+                            .sort("doc_id"))
+        titles = joined["title"].fill_null("").to_list()
+        abstracts = joined["abstract"].fill_null("").to_list()
+
     years = graph["node_year"].reshape(-1).tolist() if "node_year" in graph else [None] * num_nodes
     docs = pl.DataFrame({
-        "doc_id": list(range(num_nodes)), "title": [""] * num_nodes,
-        "abstract": [""] * num_nodes, "label": labels.reshape(-1).tolist(),
+        "doc_id": list(range(num_nodes)), "title": titles,
+        "abstract": abstracts, "label": labels.reshape(-1).tolist(),
         "venue": ["arXiv"] * num_nodes, "publisher": ["OGB"] * num_nodes,
         "authors": [""] * num_nodes, "year": years, "original_split": split})
 
     edges = graph["edge_index"]
     citations = pl.DataFrame({"source": edges[0].tolist(), "target": edges[1].tolist()})
     save_dataset_bundle("ogbn_arxiv", out, docs, config_template, citations)
+
+
+def _parse_first_label(value: str | None) -> str:
+    """
+    Extract the first label from a FoRC label cell.
+
+    FoRC2025 stores Level1/2/3 as Python-list literals in CSV cells
+    (e.g. ``"['Multilingual NLP', 'Low-resource Languages']"``). Single-label
+    training needs one stable target; we deterministically take the first.
+    """
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return text
+        if isinstance(parsed, (list, tuple)) and parsed:
+            return str(parsed[0])
+        return str(parsed)
+    return text
 
 
 def normalize_forc_documents(df: pl.DataFrame) -> pl.DataFrame:
@@ -110,7 +186,7 @@ def normalize_forc_documents(df: pl.DataFrame) -> pl.DataFrame:
         "publisher": ["publisher"],
         "authors": ["authors", "author", "author_names"],
         "year": ["year", "publication_year"],
-        "label": ["label", "labels", "topic", "field", "class"]}
+        "label": ["label", "labels", "topic", "field", "class", "level1"]}
 
     for target, candidates in candidate_sets.items():
         for candidate in candidates:
@@ -122,8 +198,13 @@ def normalize_forc_documents(df: pl.DataFrame) -> pl.DataFrame:
 
     # Multi-label lists do not fit CrossEntropyLoss; use the first label as the
     # stable single-label target for this benchmark path.
-    if "label" in out.columns and isinstance(out.schema["label"], pl.List):
-        out = out.with_columns(pl.col("label").list.first().alias("label"))
+    if "label" in out.columns:
+        schema_label = out.schema["label"]
+        if isinstance(schema_label, pl.List):
+            out = out.with_columns(pl.col("label").list.first().alias("label"))
+        elif schema_label == pl.Utf8:
+            out = out.with_columns(
+                pl.col("label").map_elements(_parse_first_label, return_dtype=pl.Utf8).alias("label"))
 
     return ensure_required_columns(out)
 
@@ -140,6 +221,26 @@ def normalize_forc_citations(df: pl.DataFrame) -> pl.DataFrame:
     return df.rename({src_col: "source", tgt_col: "target"}).select(["source", "target"])
 
 
+_FORC_SPLIT_FILES: Final[dict[str, str]] = {
+    "train.csv": "train", "val.csv": "val",
+    "test.csv": "test", "weaklylabeled.csv": "unlabeled"}
+
+
+def _collect_forc_split_tables(extract_dir: Path) -> list[tuple[Path, str]]:
+    """
+    Find FoRC2025 split CSVs under any nested data directory, skipping
+    macOS metadata sidecars (``__MACOSX/`` and ``._*`` AppleDouble files).
+    """
+    results: list[tuple[Path, str]] = []
+    for filename, split in _FORC_SPLIT_FILES.items():
+        for path in extract_dir.rglob(filename):
+            parts = path.parts
+            if any(part == "__MACOSX" or part.startswith("._") for part in parts):
+                continue
+            results.append((path, split))
+    return results
+
+
 def download_forc2025(out_dir: str | Path, config_template: str | Path) -> None:
     """Download FoRC2025, detect relevant tables, and export normalized outputs."""
     out = Path(out_dir)
@@ -154,35 +255,34 @@ def download_forc2025(out_dir: str | Path, config_template: str | Path) -> None:
     if not extract_dir.exists():
         extract_zip(zip_path, extract_dir)
 
-    # Do not hardcode ZIP filenames. If automatic resolution fails, write a
-    # manifest so the researcher can inspect candidates and map files manually.
-    doc_cands = [
-        path for path in find_candidates(
-            extract_dir, ("*document*.csv", "*documents*.csv", "*paper*.csv", "*.parquet", "*.jsonl"))
-        if "citation" not in path.name.lower() and "edge" not in path.name.lower()]
-    cit_cands = [
-        path for path in find_candidates(
-            extract_dir, ("*citation*.csv", "*citations*.csv", "*edge*.csv", "*graph*.csv", "*.parquet", "*.jsonl"))
-        if any(key in path.name.lower() for key in ("citation", "edge", "graph"))]
-
+    # FoRC2025 ships {train,val,test,weaklylabeled}.csv under Final_data/.
+    # It is a pure classification benchmark with no citation graph, so the
+    # citation table is intentionally empty.
+    split_tables = _collect_forc_split_tables(extract_dir)
     manifest = {
         "download_url": FORC2025_URL, "zip_path": str(zip_path), "extract_dir": str(extract_dir),
-        "document_candidates": [str(path) for path in doc_cands],
-        "citation_candidates": [str(path) for path in cit_cands]}
+        "document_candidates": [str(path) for path, _ in split_tables],
+        "citation_candidates": []}
     (out / "forc_manifest.json").write_text(json.dumps(manifest, indent=2))
 
-    if not doc_cands or not cit_cands:
+    if not split_tables:
         save_benchmark_config("forc4cl", out, config_template)
         (out / "README_forc4cl.json").write_text(json.dumps({
             "status": "downloaded_but_manual_mapping_needed",
             "message": (
-                "FoRC2025 archive was downloaded and extracted, but document/citation "
-                "files could not be mapped automatically. Inspect forc_manifest.json.")}, indent=2))
+                "FoRC2025 archive was downloaded and extracted, but expected split files "
+                "(train.csv/val.csv/test.csv) could not be located. Inspect forc_manifest.json.")},
+            indent=2))
         return
 
-    documents = normalize_forc_documents(read_table(doc_cands[0]))
-    citations = normalize_forc_citations(read_table(cit_cands[0]))
-    save_dataset_bundle("forc4cl", out, documents, config_template, citations)
+    frames: list[pl.DataFrame] = []
+    for path, split in split_tables:
+        frame = read_table(path).with_columns(pl.lit(split).alias("original_split"))
+        frames.append(frame)
+    combined = pl.concat(frames, how="diagonal_relaxed")
+
+    documents = normalize_forc_documents(combined)
+    save_dataset_bundle("forc4cl", out, documents, config_template, empty_citations())
 
 
 def reconstruct_abstract(inverted_index: dict[str, list[int]] | None) -> str:
@@ -527,6 +627,66 @@ def download_openalex(
     print(f"[openalex] wrote {n_docs} documents and {n_cits} citations to {out}")
 
 
+_PLANETOID_TEXT_URLS: Final[dict[str, str]] = {
+    "cora": CORA_RAW_TEXTS_URL, "pubmed": PUBMED_RAW_TEXTS_URL}
+
+_PLANETOID_TEXT_SPLIT_RE = re.compile(r"^Title:\s*(?P<title>.*?)(?:\s*Abstract:\s*(?P<abstract>.*))?$", re.DOTALL)
+
+
+def _load_planetoid_text(name: str, raw_dir: Path, num_nodes: int) -> tuple[list[str], list[str]] | None:
+    """
+    Fetch and parse raw titles+abstracts for a Planetoid benchmark.
+
+    PyG's Planetoid ships only bag-of-words features; without raw text, any
+    text encoder learns nothing. Graph-COM publishes per-node string lists
+    aligned to Planetoid node order; entries follow ``"Title: <t>[\\n|\\t]Abstract: <a>"``.
+
+    Returns (titles, abstracts) lists of length num_nodes, or None when the
+    fetch fails or the row count does not match (caller falls back to empty).
+    """
+    key = name.lower()
+    url = _PLANETOID_TEXT_URLS.get(key)
+    if url is None:
+        return None
+
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    text_path = raw_dir / f"{key}_raw_texts.pt"
+    if not text_path.exists():
+        try:
+            download_file(url, text_path)
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"[{key}] Warning: could not fetch raw_texts.pt ({exc}); "
+                  "title/abstract will be empty.")
+            return None
+
+    try:
+        # raw_texts.pt is a torch-pickled list[str]; weights_only=True rejects
+        # arbitrary Python objects in PyTorch 2.6+.
+        entries = torch.load(text_path, weights_only=False)
+    except Exception as exc:
+        print(f"[{key}] Warning: could not parse raw_texts.pt ({exc}); "
+              "title/abstract will be empty.")
+        return None
+
+    if not isinstance(entries, list) or len(entries) != num_nodes:
+        print(f"[{key}] Warning: raw_texts.pt has {len(entries) if hasattr(entries, '__len__') else '?'} "
+              f"entries, expected {num_nodes}; title/abstract will be empty.")
+        return None
+
+    titles: list[str] = []
+    abstracts: list[str] = []
+    for entry in entries:
+        text = "" if entry is None else str(entry)
+        match = _PLANETOID_TEXT_SPLIT_RE.match(text)
+        if match:
+            titles.append((match.group("title") or "").strip())
+            abstracts.append((match.group("abstract") or "").strip())
+        else:
+            titles.append(text.strip())
+            abstracts.append("")
+    return titles, abstracts
+
+
 def download_planetoid_dataset(name: str, out_dir: str | Path, config_template: str | Path) -> None:
     """Download a Planetoid benchmark and convert it to the shared schema."""
     # Deconstruct PyG objects into universal documents + citations tables so the
@@ -535,9 +695,15 @@ def download_planetoid_dataset(name: str, out_dir: str | Path, config_template: 
     dataset = Planetoid(root=str(out / "raw"), name=name)
     data = dataset[0]
 
+    titles = [""] * data.num_nodes
+    abstracts = [""] * data.num_nodes
+    text_pair = _load_planetoid_text(name, out / "raw" / name, data.num_nodes)
+    if text_pair is not None:
+        titles, abstracts = text_pair
+
     docs = pl.DataFrame({
-        "doc_id": list(range(data.num_nodes)), "title": [""] * data.num_nodes,
-        "abstract": [""] * data.num_nodes, "label": data.y.cpu().numpy().tolist(),
+        "doc_id": list(range(data.num_nodes)), "title": titles,
+        "abstract": abstracts, "label": data.y.cpu().numpy().tolist(),
         "venue": [name] * data.num_nodes, "publisher": ["Planetoid"] * data.num_nodes,
         "authors": [""] * data.num_nodes, "year": [None] * data.num_nodes,
         "original_split": mask_to_split(data.train_mask.cpu(), data.val_mask.cpu(), data.test_mask.cpu())})

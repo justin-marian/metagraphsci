@@ -35,6 +35,12 @@ BENCHMARK_DEFAULTS_DATASETS: Final[dict[str, dict[str, str]]] = {
     "openalex": {"label_column": "label", "source_col": "source", "target_col": "target", "split_strategy": "time"}}
 
 FORC2025_URL: Final[str] = "https://zenodo.org/records/14901529/files/FoRC2025_data.zip?download=1"
+OGBN_ARXIV_TITLEABS_URL: Final[str] = "https://snap.stanford.edu/ogb/data/misc/ogbn_arxiv/titleabs.tsv.gz"
+# Raw titles+abstracts aligned 1:1 with PyG Planetoid node indices, published by
+# Graph-COM (https://huggingface.co/datasets/Graph-COM/Text-Attributed-Graphs).
+# Each .pt is a torch-pickled list[str] in "Title: <t>\n|\\tAbstract: <a>" form.
+CORA_RAW_TEXTS_URL: Final[str] = "https://huggingface.co/datasets/Graph-COM/Text-Attributed-Graphs/resolve/main/cora/raw_texts.pt"
+PUBMED_RAW_TEXTS_URL: Final[str] = "https://huggingface.co/datasets/Graph-COM/Text-Attributed-Graphs/resolve/main/pubmed/raw_texts.pt"
 
 DATASET_REGISTRY: Final[dict[str, dict[str, str]]] = {
     "cora": {"name": "Cora", "source": "planetoid", "split_strategy": "random"},
@@ -349,4 +355,5 @@ __all__ = [
     "MIN_REF_COUNT", "MAX_PAPERS", "BATCH_SIZE",
     # Benchmark
     "BENCHMARK_DEFAULTS", "BENCHMARK_DEFAULTS_DATASETS",
-    "BENCHMARK_RUN_PREFIX", "DATASET_REGISTRY", "FORC2025_URL"]
+    "BENCHMARK_RUN_PREFIX", "DATASET_REGISTRY", "FORC2025_URL", "OGBN_ARXIV_TITLEABS_URL",
+    "CORA_RAW_TEXTS_URL", "PUBMED_RAW_TEXTS_URL"]
