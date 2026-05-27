@@ -67,27 +67,38 @@ def force_device_env(device: str) -> str:
     return "cuda"
 
 
-def remap_labels(
-    holdout_docs: "pl.DataFrame", label_names: list[str], label_column: str = "label",
+def normalise_holdout(
+    raw_holdout: "pl.DataFrame", label_names: list[str], label_column: str = "label",
 ) -> "pl.DataFrame":
-    """Apply the training label_names ordering to holdout string labels.
+    """Normalise the holdout frame and apply the training label-id mapping.
 
     ``prepare_documents`` would otherwise resort the holdout labels alphabetically
-    over a 100-row subset, producing a different id space than training.
+    over a 100-row subset, producing a different id space than training. We
+    therefore drop ``label`` before normalisation and re-attach it as a numeric
+    column using the training ``label_names`` ordering.
     """
     import polars as pl  # noqa: F401  (forwarded into closure scope)
+    from src.data.tabular_utils import prepare_documents
 
+    if label_column not in raw_holdout.columns:
+        raise ValueError(f"Holdout missing required '{label_column}' column.")
+
+    raw_label_strings = [str(v) if v is not None else None
+                         for v in raw_holdout[label_column].cast(pl.String).to_list()]
     mapping = {name: idx for idx, name in enumerate(label_names)}
-    unknown = sorted(
-        set(str(v) for v in holdout_docs.drop_nulls(label_column)[label_column].to_list())
-        - set(label_names))
+    unknown = sorted(set(s for s in raw_label_strings if s is not None) - set(label_names))
     if unknown:
         # Should not happen — build_eval_holdout filters to known labels — but
         # surface the surprise loudly rather than silently producing -1 ids.
-        raise ValueError(f"Holdout contains {len(unknown)} labels missing from training: {unknown[:5]}")
+        raise ValueError(
+            f"Holdout contains {len(unknown)} labels missing from training: {unknown[:5]}")
 
-    return holdout_docs.with_columns(
-        pl.col(label_column).cast(pl.String).replace(mapping).cast(pl.Int64).alias("label"))
+    # Strip the label column before prepare_documents so it doesn't re-derive
+    # the id mapping on the 100-row slice.
+    stripped = raw_holdout.drop(label_column)
+    normalised, _ = prepare_documents(stripped, label_column=label_column)
+    label_ids = [mapping[s] if s is not None else None for s in raw_label_strings]
+    return normalised.with_columns(pl.Series(name="label", values=label_ids, dtype=pl.Int64))
 
 
 def main() -> None:
@@ -152,14 +163,7 @@ def main() -> None:
 
     logger.info("Loading holdout docs ({})", holdout_docs_path)
     raw_holdout = pl.read_parquet(holdout_docs_path)
-    # Run prepare_documents indirectly through load_documents but with label-id
-    # mapping replaced by the training mapping. load_documents would resort
-    # labels over the 100-row slice; instead we call its normalisation helpers
-    # and patch the label column ourselves.
-    from src.data.tabular_utils import prepare_documents
-
-    holdout_docs, _ = prepare_documents(raw_holdout, label_column=data_cfg["label_column"])
-    holdout_docs = remap_labels(holdout_docs, label_names, label_column="label")
+    holdout_docs = normalise_holdout(raw_holdout, label_names, label_column=data_cfg["label_column"])
 
     holdout_ids = set(int(v) for v in holdout_docs["doc_id"].to_list())
     train_ids = set(int(v) for v in train_docs["doc_id"].to_list())

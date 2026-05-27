@@ -36,6 +36,14 @@ from src.data.constants import (
     OPENALEX_RETRY_TIMEOUT_S, OPENALEX_SELECT, OPENALEX_SLEEP_S,
     OPENALEX_TIMEOUT_S, UNKNOWN_TOKEN, YEAR)
 
+# Force unbuffered stderr so progress shows up under nohup/tee/redirected logs.
+# Loguru's default sink goes to stderr but its buffering depends on the runtime;
+# re-binding here also guarantees a sink exists even if some earlier import
+# removed the defaults (src.* helpers do this in production runs).
+logger.remove()
+logger.add(sys.stderr, level="INFO",
+           format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}")
+
 
 # OpenAlex field id for "Artificial Intelligence" (level-1 field under "Computer Science").
 # Filter scope used by the production AI dataset builder; matches the topic universe
@@ -146,11 +154,20 @@ def iter_openalex_works(
         params["mailto"] = mailto
 
     fetched = 0
+    page_no = 0
     while True:
         url = f"{OPENALEX_BASE}/works?{urllib.parse.urlencode(params)}"
+        page_no += 1
+        logger.info("OpenAlex page {} requesting up to {} works (total fetched so far: {})",
+                    page_no, OPENALEX_PAGE_SIZE, fetched)
         page = fetch_with_retry(url)
         results = page.get("results") or []
+        total_estimate = (page.get("meta") or {}).get("count")
+        if page_no == 1 and total_estimate is not None:
+            logger.info("OpenAlex reports {} works matching the filter; will scan up to {}",
+                        total_estimate, max_papers)
         if not results:
+            logger.warning("OpenAlex returned an empty page; stopping pagination.")
             return
 
         for work in results:
@@ -161,6 +178,7 @@ def iter_openalex_works(
 
         next_cursor = (page.get("meta") or {}).get("next_cursor")
         if not next_cursor:
+            logger.info("No next_cursor returned; OpenAlex pagination exhausted at {} works.", fetched)
             return
         params["cursor"] = next_cursor
         time.sleep(OPENALEX_SLEEP_S)
@@ -205,11 +223,13 @@ def work_to_row(work: dict[str, Any]) -> dict[str, Any] | None:
 
 def main() -> None:
     args = parse_args()
+    print(f"[build_eval_holdout] starting; out={args.out} n={args.n} from_year={args.from_year}", flush=True)
     out_dir: Path = args.out
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if not args.train_docs.exists():
         raise FileNotFoundError(f"Training documents not found: {args.train_docs}")
+    logger.info("Reading training documents from {}", args.train_docs)
     train_docs = pl.read_parquet(args.train_docs)
     train_ids = set(int(v) for v in train_docs["doc_id"].to_list())
     train_labels = set(str(v) for v in train_docs.drop_nulls("label")["label"].to_list())
@@ -217,6 +237,7 @@ def main() -> None:
                 train_docs.height, len(train_labels), len(train_ids))
 
     selected_rows: list[dict[str, Any]] = []
+    scanned = 0
     skipped_overlap = 0
     skipped_label_unknown = 0
     skipped_empty = 0
@@ -224,17 +245,21 @@ def main() -> None:
     for work in iter_openalex_works(
         from_year=args.from_year, mailto=args.mailto, max_papers=args.max_fetch
     ):
+        scanned += 1
         row = work_to_row(work)
         if row is None:
             skipped_empty += 1
-            continue
-        if row["doc_id"] in train_ids:
+        elif row["doc_id"] in train_ids:
             skipped_overlap += 1
-            continue
-        if row["label"] not in train_labels:
+        elif row["label"] not in train_labels:
             skipped_label_unknown += 1
-            continue
-        selected_rows.append(row)
+        else:
+            selected_rows.append(row)
+
+        if scanned % 200 == 0:
+            logger.info("Scanned {} works; kept {} / {} so far (overlap={}, unknown_label={}, empty={})",
+                        scanned, len(selected_rows), args.n, skipped_overlap,
+                        skipped_label_unknown, skipped_empty)
         if len(selected_rows) >= args.n:
             break
 
