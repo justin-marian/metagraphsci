@@ -86,11 +86,11 @@ raw corpora
 
 For a paper $i$, the three encoders produce text, metadata, and citation representations:
 
-$
+$$
 h_i^{t}=f_t(x_i^{title},x_i^{abstract}), \qquad
 h_i^{m}=f_m(v_i,p_i,a_i,y_i), \qquad
 h_i^{g}=f_g(i,\mathcal{N}_i,\mathcal{E}_i)
-$
+$$
 
 The fused representation is a gated residual combination:
 
@@ -102,9 +102,9 @@ $
 
 Neighbour candidates are ranked with a weighted structural score:
 
-$
+$$
 s(i,j)=\lambda_d d(j)+\lambda_y e^{-|y_i-y_j|/\tau}+\lambda_r r(i,j)+\lambda_o J(\mathcal{N}_i,\mathcal{N}_j)
-$
+$$
 
 where degree, temporal proximity, reciprocity, and one-hop overlap determine which citation contexts are selected.
 
@@ -112,17 +112,17 @@ where degree, temporal proximity, reciprocity, and one-hop overlap determine whi
 
 The classifier uses cosine-normalised class prototypes:
 
-$
+$$
 \ell_{i,c}=\alpha \cdot \frac{z_i^{\top}p_c}{\lVert z_i\rVert_2\lVert p_c\rVert_2}
-$
+$$
 
 ### Semi-supervised objective
 
 Training combines supervised classification, graph-aware contrastive learning, and confidence-filtered pseudo-labels:
 
-$
+$$
 \mathcal{L}=\mathcal{L}_{sup}+\lambda_{ssl}\mathcal{L}_{graph}+\lambda_{pl}\mathcal{L}_{pseudo}
-$
+$$
 
 <p align="center">
   <img src="images/losses.png" alt="Supervised and pseudo-label training losses" width="95%">
