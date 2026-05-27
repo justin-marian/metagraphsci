@@ -240,13 +240,16 @@ def main() -> None:
 
     # max_authors mirrors the per-split logic in build_run_bundle: derive from
     # the dataset's own document slice unless the config pins a fixed value.
+    # NB: build_dataset's type hint says pd.DataFrame but the dataset internally
+    # calls .clone() which only exists on polars frames — match production usage
+    # in build_run_bundle (which always passes polars) and pass polars here too.
     data_cfg_local = dict(data_cfg)
     if data_cfg_local.get("max_authors") is None:
         data_cfg_local["max_authors"] = infer_max_authors(holdout_docs.to_pandas())
 
     dataset = build_dataset(
-        docs=holdout_docs.to_pandas(),
-        context_docs=combined_docs.to_pandas(),
+        docs=holdout_docs,
+        context_docs=combined_docs,
         tokenizer=tokenizer, encoders=encoders,
         context_cache=holdout_neighbor_cache, data_cfg=data_cfg_local,
         pretokenized=pretokenized)
